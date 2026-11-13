@@ -14,103 +14,143 @@ import pyautogui
 import pytesseract
 from PIL import Image
 
-TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+#TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+TESSERACT_PATH = r"C:\Users\56\AppData\Local\Tesseract-OCR\tesseract.exe"
 OUTPUT_FILE = Path(__file__).with_name("output.txt")
 INTERVAL = 5  # секунд
 LANG = "rus+eng"
 
+if not Path(TESSERACT_PATH).exists():
+    raise FileNotFoundError(
+        f"Tesseract не найден по пути: {TESSERACT_PATH}\n"
+        "Проверьте, что приложение установлено в C:\\Users\\56\\AppData\\Local\\Tesseract-OCR"
+    )
+
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 
-def capture_screen() -> Image.Image:
-    """Снимок всего экрана (все мониторы складываются в одно изображение)."""
-    with mss.mss() as sct:
-        monitor = sct.monitors[0]  # 0 = объединённая область всех мониторов
-        shot = sct.grab(monitor)
-        return Image.frombytes("RGB", shot.size, shot.rgb)
+class ScreenAnalyzer:
+    """Класс для захвата экрана, OCR и анализа пикселей."""
 
+    @staticmethod
+    def capture_screen() -> Image.Image:
+        """Снимок всего экрана (все мониторы складываются в одно изображение)."""
+        with mss.mss() as sct:
+            monitor = sct.monitors[0]  # 0 = объединённая область всех мониторов
+            shot = sct.grab(monitor)
+            return Image.frombytes("RGB", shot.size, shot.rgb)
 
-def capture_region(x: int, y: int, width: int, height: int) -> Image.Image:
-    """Снимок прямоугольной области экрана по координатам x, y, width, height."""
-    with mss.mss() as sct:
-        region = {
-            "left": max(0, x),
-            "top": max(0, y),
-            "width": max(1, width),
-            "height": max(1, height),
-        }
-        shot = sct.grab(region)
-        return Image.frombytes("RGB", shot.size, shot.rgb)
+    @staticmethod
+    def capture_region(x: int, y: int, width: int, height: int) -> Image.Image:
+        """Снимок прямоугольной области экрана по координатам x, y, width, height."""
+        with mss.mss() as sct:
+            region = {
+                "left": max(0, x),
+                "top": max(0, y),
+                "width": max(1, width),
+                "height": max(1, height),
+            }
+            shot = sct.grab(region)
+            return Image.frombytes("RGB", shot.size, shot.rgb)
 
+    @staticmethod
+    def get_text_in_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
+        """Получить текст из области экрана по координатам."""
+        image = ScreenAnalyzer.capture_region(x, y, width, height)
+        text = pytesseract.image_to_string(image, lang=lang)
+        return text.strip()
 
-def get_text_in_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
-    """Получить текст из области экрана по координатам."""
-    image = capture_region(x, y, width, height)
-    text = pytesseract.image_to_string(image, lang=lang)
-    return text.strip()
+    @staticmethod
+    def get_pixels_colors_in_region(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        as_2d: bool = False,
+    ) -> List[Tuple[int, int, int]] | List[List[Tuple[int, int, int]]]:
+        """Получить массив цветов RGB точек в области экрана.
 
+        По умолчанию возвращается плоский список из width * height элементов.
+        Если as_2d=True, возвращается двумерный массив по строкам.
+        """
+        image = ScreenAnalyzer.capture_region(x, y, width, height)
+        pixels: List[Tuple[int, int, int]] = []
 
-def get_pixels_colors_in_region(
-    x: int,
-    y: int,
-    width: int,
-    height: int,
-    as_2d: bool = False,
-) -> List[Tuple[int, int, int]] | List[List[Tuple[int, int, int]]]:
-    """Получить массив цветов RGB точек в области экрана.
-
-    По умолчанию возвращается плоский список из width * height элементов.
-    Если as_2d=True, возвращается двумерный массив по строкам.
-    """
-    image = capture_region(x, y, width, height)
-    pixels: List[Tuple[int, int, int]] = []
-
-    for row in range(height):
-        row_pixels: List[Tuple[int, int, int]] = []
-        for col in range(width):
-            pixel = image.getpixel((col, row))
+        for row in range(height):
+            row_pixels: List[Tuple[int, int, int]] = []
+            for col in range(width):
+                pixel = image.getpixel((col, row))
+                if as_2d:
+                    row_pixels.append(pixel)
+                else:
+                    pixels.append(pixel)
             if as_2d:
-                row_pixels.append(pixel)
-            else:
-                pixels.append(pixel)
-        if as_2d:
-            pixels.append(row_pixels)
+                pixels.append(row_pixels)
 
-    return pixels
+        return pixels
 
+    @staticmethod
+    def color_matches(pixel: Tuple[int, int, int], target_color: Tuple[int, int, int], tolerance: int = 0) -> bool:
+        """Проверить, совпадает ли цвет пикселя с target_color с допустимым отклонением."""
+        return all(abs(pixel[i] - target_color[i]) <= tolerance for i in range(3))
 
-def click_in_place(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.0) -> None:
-    """Кликнуть левой/правой кнопкой мыши в указанное место."""
-    pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
+    @staticmethod
+    def get_first_non_color_y_in_region(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        target_color: Tuple[int, int, int],
+        tolerance: int = 0,
+    ) -> int | None:
+        """Вернуть Y координату первого пикселя в прямоугольнике, который отличается от target_color.
 
+        Поиск идёт сверху вниз и слева направо. Если все пиксели совпадают, возвращается None.
+        """
+        image = ScreenAnalyzer.capture_region(x, y, width, height)
 
-def type_text(text: str, interval: float = 0.0) -> None:
-    """Имитировать ввод текста с клавиатуры."""
-    if not text:
-        return
-    pyautogui.typewrite(text, interval=interval)
+        for row in range(height):
+            for col in range(width):
+                pixel = image.getpixel((col, row))
+                if not ScreenAnalyzer.color_matches(pixel, target_color, tolerance):
+                    return y + row
 
+        return None
 
-def ocr_image(image: Image.Image) -> str:
-    text = pytesseract.image_to_string(image, lang=LANG)
-    return text.strip()
+    @staticmethod
+    def click_in_place(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.0) -> None:
+        """Кликнуть левой/правой кнопкой мыши в указанное место."""
+        pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
 
+    @staticmethod
+    def type_text(text: str, interval: float = 0.0) -> None:
+        """Имитировать ввод текста с клавиатуры."""
+        if not text:
+            return
+        pyautogui.typewrite(text, interval=interval)
 
-def main() -> None:
-    print(f"Запуск. Интервал {INTERVAL} с, вывод в {OUTPUT_FILE}")
-    while True:
-        started = time.monotonic()
-        try:
-            text = ocr_image(capture_screen())
-            OUTPUT_FILE.write_text(text, encoding="utf-8")
-            stamp = datetime.now().strftime("%H:%M:%S")
-            print(f"[{stamp}] распознано {len(text)} символов")
-        except Exception as exc:  # noqa: BLE001 - не роняем цикл из-за сбоя кадра
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ошибка: {exc}")
+    @staticmethod
+    def ocr_image(image: Image.Image) -> str:
+        text = pytesseract.image_to_string(image, lang=LANG)
+        return text.strip()
 
-        elapsed = time.monotonic() - started
-        time.sleep(max(0.0, INTERVAL - elapsed))
+    def main(self) -> None:
+        print(f"Запуск. Интервал {INTERVAL} с, вывод в {OUTPUT_FILE}")
+        while True:
+            started = time.monotonic()
+            try:
+                text = self.ocr_image(self.capture_screen())
+                stamp = datetime.now().strftime("%H:%M:%S")
+                OUTPUT_FILE.write_text(f"[{stamp}] распознано {len(text)} символов", encoding="utf-8")
+                print(f"[{stamp}] распознано {len(text)} символов")
+            except Exception as exc:  # noqa: BLE001 - не роняем цикл из-за сбоя кадра
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ошибка: {exc}")
+
+            elapsed = time.monotonic() - started
+            time.sleep(max(0.0, INTERVAL - elapsed))
 
 
 if __name__ == "__main__":
-    main()
+    ScreenAnalyzer().main()
+
+
