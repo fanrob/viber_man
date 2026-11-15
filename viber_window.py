@@ -18,7 +18,7 @@ import time
 from typing import List, Tuple
 
 import viber_config as cfg
-from ocr_screen import ScreenAnalyzer
+from ocr_screen import SCROLL_DOWN,SCROLL_UP,ScreenAnalyzer
 
 
 class ViberWindowError(RuntimeError):
@@ -32,10 +32,7 @@ class ViberWindowNotFoundError(ViberWindowError):
 class ViberWindow:
     """Высокоуровневые действия с окном Viber."""
 
-    # Направления скролла (дублируются из конфига для удобства вызова)
-    SCROLL_UP = cfg.SCROLL_UP
-    SCROLL_DOWN = cfg.SCROLL_DOWN
-
+    
     def __init__(self, title: str = cfg.WINDOW_TITLE) -> None:
         self.title = title
 
@@ -54,6 +51,9 @@ class ViberWindow:
         if window.isMinimized:
             window.restore()
             time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
+        elif not window.isActive:
+            window.activate()
+            time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
         return window
 
     def _activate(self) -> None:
@@ -71,12 +71,12 @@ class ViberWindow:
         """Перевести зону из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
         x, y, width, height = zone
-        return left + x, top + y, width, height
+        return left + x, top + 30 + y, width, height
 
     def _absolute_point(self, point: Tuple[int, int]) -> Tuple[int, int]:
         """Перевести точку из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
-        return left + point[0], top + point[1]
+        return left + point[0], top + 30 + point[1]
 
     def _scroll(self, point: Tuple[int, int], direction: int, amount: int) -> None:
         """Прокрутить колёсиком над точкой окна и дать списку перерисоваться."""
@@ -89,7 +89,27 @@ class ViberWindow:
     # ------------------------------------------------------------------
 
     def has_new_messages(self) -> bool:
-        """Проверить, есть ли новые сообщения (пиксели цвета бейджа в зоне)."""
+        """Проверить, есть ли новые сообщения (пиксели цвета кружка в зоне).
+        Прокручивает наверх список чатов, проверяет наличие кружка"""
+
+        #проверить, что кнопка вверх списка чатов видна (т.е. список не прокручен до верха)
+        x, y, width, height = self._absolute_zone(cfg.BUTTON_UP_ZONE)
+        if not ScreenAnalyzer.has_color_in_region(
+            x, y, width, height,
+            cfg.BUTTON_UP_COLOR,
+            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
+            cfg.BUTTON_UP_MIN_PIXELS,
+        ):
+            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
+                self._scroll(cfg.CHATS_SCROLL_POINT, SCROLL_UP, cfg.SCROLL_AMOUNT)
+                time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        else:
+            #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
+            x, y = self._absolute_point(cfg.BUTTON_UP)
+            ScreenAnalyzer.click_in_place(x, y)
+
+        time.sleep(cfg.SCROLL_SETTLE_DELAY)
+            
         x, y, width, height = self._absolute_zone(cfg.NEW_MESSAGES_ZONE)
         return ScreenAnalyzer.has_color_in_region(
             x,
@@ -108,9 +128,46 @@ class ViberWindow:
     def get_chat_list(self) -> List[str]:
         """Получить список чатов на текущем экране.
 
-        Заглушка: алгоритм распознавания будет реализован позже.
+        Учесть в списки чатов поле с днюхами, поле с рекламой
+        Высота строчки чата - 72 пикс
+        вначале списка чатов может быть поле с днюхами(не обязательно), потом список чатов, потом реклама(тоже не обязательно)
+        поле с днюхами 40 px, цвет 115, 96, 242
+
         """
-        return []  # TODO: реализовать получение списка чатов
+        #проверить, что нет поля с днюхой. Если есть, то закрыть его, подождать полескунды, и потом уже сканировать список чатов
+        x, y, width, height = self._absolute_zone(cfg.CHAT_LIST_HOLIDAY_FIELD)
+        if ScreenAnalyzer.has_color_in_region(
+            x, y, width, 40,
+            cfg.COLOR_CHAT_LIST_HOLIDAY_FIELD,
+            cfg.DEFAULT_COLOR_TOLERANCE,
+            20,
+        ):
+            #кликнуть по кнопке закрытия поля с днюхой (кнопка крестик в правом верхнем углу поля)
+            print("Закрываем поле с днюхой")
+            ScreenAnalyzer.click_in_place(*self._absolute_point(cfg.BUTTON_CLOSE_HOLIDAY_FIELD))
+            time.sleep(cfg.CLICK_DEFAULT_DELAY)
+
+        #теперь список чатов. Высота строки чата - 72 px. Сканируем список чатов сверху вниз, пока не дойдём до конца зоны списка чатов
+        cury = 0
+        chat_list = []
+        while cury < cfg.CHAT_LIST_ZONE[3]:
+            # 1. получаем зону с названием чата
+            # 2. получаем число новых сообщений в чате (если есть)
+
+            # распознать текст в зоне названия чата (OCR)
+            chat_name = ScreenAnalyzer.get_text_in_region(
+                *self._absolute_zone((cfg.CHAT_LIST_ZONE[0]+cfg.CHAT_HEADER_COORD[0], 
+                                      cfg.CHAT_LIST_ZONE[1] + cury + cfg.CHAT_HEADER_COORD[1], 
+                                      cfg.CHAT_HEADER_COORD[2], 
+                                      cfg.CHAT_HEADER_COORD[3]))
+            )
+            chat_list.append(chat_name)
+
+            # TODO: если имя чата пустое, то открыть чат, и скопировать имя чата через правое меню и вставить из буфера. 
+            #           Обязательно проверить, не прочитали ли случайно новые сообщения!!!
+            # TODO: тут позже вставть проверку на рекламу
+            cury += cfg.CHAT_RECORD_HEIGHT  # переходим к следующей строке чата
+        return chat_list
 
     # ------------------------------------------------------------------
     # 3. Скролл списка чатов
@@ -126,6 +183,7 @@ class ViberWindow:
 
     def scroll_messages(self, direction: int, amount: int = cfg.SCROLL_AMOUNT) -> None:
         """Прокрутить ленту сообщений вверх/вниз (колёсико над лентой)."""
+        #TODO: очень плохо работает, совсем мало прокручивает.
         self._scroll(cfg.MESSAGES_SCROLL_POINT, direction, amount)
 
     # ------------------------------------------------------------------
@@ -181,5 +239,5 @@ if __name__ == "__main__":
     print(f"Окно '{viber.title}': {viber._window_rect()}")
     print(f"Зона новых сообщений (экран): {viber._absolute_zone(cfg.NEW_MESSAGES_ZONE)}")
     print(f"Есть новые сообщения: {viber.has_new_messages()}")
-    print(f"Чаты (заглушка): {viber.get_chat_list()}")
+    print(f"Чаты: {viber.get_chat_list()}")
     print(f"Сообщения (заглушка): {viber.get_messages_text()}")

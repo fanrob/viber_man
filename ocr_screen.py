@@ -27,6 +27,9 @@ OUTPUT_FILE = Path(__file__).with_name("output.txt")
 INTERVAL = 5  # секунд
 LANG = "rus+eng"
 
+SCROLL_UP = 1
+SCROLL_DOWN = -1
+
 
 def _ensure_tesseract() -> None:
     """Проверить наличие Tesseract и настроить путь к нему (лениво, при OCR)."""
@@ -65,9 +68,12 @@ class ScreenAnalyzer:
     @staticmethod
     def get_text_in_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
         """Получить текст из области экрана по координатам."""
+        #для отладки можно сохранить снимок области в файл:
+        
         _ensure_tesseract()
         image = ScreenAnalyzer.capture_region(x, y, width, height)
         text = pytesseract.image_to_string(image, lang=lang)
+        image.save(f"region_{int(time.time() * 1000)}.png")
         return text.strip()
 
     @staticmethod
@@ -191,9 +197,9 @@ class ScreenAnalyzer:
 
         direction: 1 — прокрутить вверх, -1 — вниз. amount — щелчки колёсика.
         """
-        if direction not in (1, -1):
+        if direction not in (SCROLL_UP, SCROLL_DOWN):
             raise ValueError(
-                f"direction должен быть 1 (вверх) или -1 (вниз), получено: {direction}"
+                f"direction должен быть {SCROLL_UP} (вверх) или {SCROLL_DOWN} (вниз), получено: {direction}"
             )
         pyautogui.moveTo(x, y)
         pyautogui.scroll(direction * amount)
