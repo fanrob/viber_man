@@ -1,7 +1,13 @@
-"""Скриншот экрана -> OCR -> текстовый файл.
+"""Утилиты экрана: скриншоты, OCR, поиск цвета, мышь и клавиатура.
 
-Каждые 5 секунд снимает весь экран, распознавает текст (русский + английский)
-и записывает его в output.txt (перезаписывая файл целиком).
+Класс ScreenAnalyzer содержит переиспользуемые утилиты:
+- снимки областей экрана и OCR;
+- поиск пикселей нужного цвета;
+- клики, скролл колёсиком, ввод текста, нажатие клавиш;
+- поиск и активация окна по заголовку.
+
+main() — фоновый цикл: каждые 5 секунд снимает весь экран, распознавает текст
+(русский + английский) и записывает его в output.txt (перезаписывая файл целиком).
 """
 
 import time
@@ -11,22 +17,25 @@ from typing import List, Tuple
 
 import mss
 import pyautogui
+import pyperclip
 import pytesseract
 from PIL import Image
 
-#TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-TESSERACT_PATH = r"C:\Users\56\AppData\Local\Tesseract-OCR\tesseract.exe"
+TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+#TESSERACT_PATH = r"C:\Users\56\AppData\Local\Tesseract-OCR\tesseract.exe"
 OUTPUT_FILE = Path(__file__).with_name("output.txt")
 INTERVAL = 5  # секунд
 LANG = "rus+eng"
 
-if not Path(TESSERACT_PATH).exists():
-    raise FileNotFoundError(
-        f"Tesseract не найден по пути: {TESSERACT_PATH}\n"
-        "Проверьте, что приложение установлено в C:\\Users\\56\\AppData\\Local\\Tesseract-OCR"
-    )
 
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+def _ensure_tesseract() -> None:
+    """Проверить наличие Tesseract и настроить путь к нему (лениво, при OCR)."""
+    if not Path(TESSERACT_PATH).exists():
+        raise FileNotFoundError(
+            f"Tesseract не найден по пути: {TESSERACT_PATH}\n"
+            "Проверьте, что приложение установлено в C:\\Users\\56\\AppData\\Local\\Tesseract-OCR"
+        )
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 
 class ScreenAnalyzer:
@@ -56,6 +65,7 @@ class ScreenAnalyzer:
     @staticmethod
     def get_text_in_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
         """Получить текст из области экрана по координатам."""
+        _ensure_tesseract()
         image = ScreenAnalyzer.capture_region(x, y, width, height)
         text = pytesseract.image_to_string(image, lang=lang)
         return text.strip()
@@ -95,6 +105,39 @@ class ScreenAnalyzer:
         return all(abs(pixel[i] - target_color[i]) <= tolerance for i in range(3))
 
     @staticmethod
+    def count_color_pixels_in_region(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        target_color: Tuple[int, int, int],
+        tolerance: int = 0,
+    ) -> int:
+        """Сколько пикселей области совпадают с target_color (с допуском)."""
+        image = ScreenAnalyzer.capture_region(x, y, width, height)
+        return sum(
+            1
+            for pixel in image.getdata()
+            if ScreenAnalyzer.color_matches(pixel, target_color, tolerance)
+        )
+
+    @staticmethod
+    def has_color_in_region(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        target_color: Tuple[int, int, int],
+        tolerance: int = 0,
+        min_pixels: int = 1,
+    ) -> bool:
+        """Есть ли в области хотя бы min_pixels пикселей нужного цвета."""
+        count = ScreenAnalyzer.count_color_pixels_in_region(
+            x, y, width, height, target_color, tolerance
+        )
+        return count >= min_pixels
+
+    @staticmethod
     def get_first_non_color_y_in_region(
         x: int,
         y: int,
@@ -124,13 +167,57 @@ class ScreenAnalyzer:
 
     @staticmethod
     def type_text(text: str, interval: float = 0.0) -> None:
-        """Имитировать ввод текста с клавиатуры."""
+        """Имитировать ввод текста с клавиатуры (только ASCII-символы)."""
         if not text:
             return
         pyautogui.typewrite(text, interval=interval)
 
     @staticmethod
+    def type_text_clipboard(text: str) -> None:
+        """Ввести текст через буфер обмена (Ctrl+V) — поддерживает кириллицу."""
+        if not text:
+            return
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+
+    @staticmethod
+    def press_key(key: str) -> None:
+        """Нажать клавишу клавиатуры (например, 'enter')."""
+        pyautogui.press(key)
+
+    @staticmethod
+    def scroll_at(x: int, y: int, direction: int, amount: int = 5) -> None:
+        """Повернуть колёсико мыши над точкой (x, y).
+
+        direction: 1 — прокрутить вверх, -1 — вниз. amount — щелчки колёсика.
+        """
+        if direction not in (1, -1):
+            raise ValueError(
+                f"direction должен быть 1 (вверх) или -1 (вниз), получено: {direction}"
+            )
+        pyautogui.moveTo(x, y)
+        pyautogui.scroll(direction * amount)
+
+    @staticmethod
+    def find_window(title: str):
+        """Найти окно по заголовку. Вернуть объект окна или None."""
+        windows = pyautogui.getWindowsWithTitle(title)
+        return windows[0] if windows else None
+
+    @staticmethod
+    def activate_window(window) -> None:
+        """Активировать окно: развернуть, если свёрнуто, и вывести на передний план."""
+        if window.isMinimized:
+            window.restore()
+        try:
+            window.activate()
+        except Exception:  # noqa: BLE001 - Windows может запретить поднятие окна
+            # Запасной путь: кликнуть по заголовку окна
+            pyautogui.click(window.left + window.width // 2, window.top + 10)
+
+    @staticmethod
     def ocr_image(image: Image.Image) -> str:
+        _ensure_tesseract()
         text = pytesseract.image_to_string(image, lang=LANG)
         return text.strip()
 
