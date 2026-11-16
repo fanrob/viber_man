@@ -187,6 +187,11 @@ class ScreenAnalyzer:
         pyautogui.hotkey("ctrl", "v")
 
     @staticmethod
+    def get_clipboard_text() -> str:
+        """Прочитать текстовый содержимое буфера обмена ("" если буфер пуст/не текст)."""
+        return pyperclip.paste() or ""
+
+    @staticmethod
     def press_key(key: str) -> None:
         """Нажать клавишу клавиатуры (например, 'enter')."""
         pyautogui.press(key)

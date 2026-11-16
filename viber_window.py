@@ -1,24 +1,38 @@
 """Взаимодействие с окном Viber.
 
-Публичный API класса — 7 действий с Viber:
+Публичный API — функции, необходимые для алгоритма бота (см. main.py):
 
-    1. has_new_messages()   — проверить наличие новых сообщений
-    2. get_chat_list()      — получить список чатов на экране      (заглушка)
-    3. scroll_chats()       — прокрутить список чатов
-    4. scroll_messages()    — прокрутить ленту сообщений
-    5. get_messages_text()  — получить тексты сообщений            (заглушка)
-    6. send_message()       — отправить текст в открытый чат
-    7. click_chat()         — кликнуть по нужному чату             (заглушка)
+    Окно:
+        activate()                   — развернуть окно на передний план (вызов при старте)
 
-Низкоуровневые утилиты (снимки экрана, поиск цвета, скролл, клики, ввод,
-поиск окна) — в модуле ocr_screen; координаты, цвета и задержки — в viber_config.
+    1. has_new_messages()            — есть ли кружок новых сообщений
+       find_unread_chat_positions()  — позиции строк чатов с кружком
+    2. get_chat_list()               — чаты, видимые на экране (имя + позиция строки)
+       find_chat()                   — найти чат по имени среди видимых
+       get_chat_name()               — имя чата по позиции строки (правый клик -> Копировать)
+       get_opened_chat_name()        — имя открытого чата
+    3. scroll_chats()                — прокрутить список чатов
+    4. scroll_messages()             — прокрутить ленту сообщений
+       scroll_messages_to_bottom()   — нажать кнопку «вниз до конца»
+    5. get_messages()                — сообщения открытого чата (текст + время)
+    6. send_message()                — отправить текст
+       type_message()                — ввести текст без отправки (для проверки)
+       submit_message()              — нажать Enter (отправить)
+       get_input_text()              — прочитать набранный текст (проверка)
+       is_message_sent()             — проверить, что сообщение дошло (TODO алгоритма)
+    7. click_chat() / click_chat_at() — кликнуть по чату (по имени / по позиции)
+
+Низкоуровневые утилиты (снимки экрана, поиск цвета, скролл, клики, ввод, буфер
+обмена) — в модуле ocr_screen; координаты, цвета и задержки — в viber_config.
 """
 
 import time
-from typing import List, Tuple
+from datetime import datetime
+from typing import List, NamedTuple, Tuple
 
 import viber_config as cfg
-from ocr_screen import SCROLL_DOWN,SCROLL_UP,ScreenAnalyzer
+from ocr_screen import ScreenAnalyzer
+from viber_config import Point
 
 
 class ViberWindowError(RuntimeError):
@@ -29,16 +43,39 @@ class ViberWindowNotFoundError(ViberWindowError):
     """Окно Viber не найдено."""
 
 
+class ChatEntry(NamedTuple):
+    """Чат в списке на экране."""
+
+    name: str        # имя чата (распознано или скопировано)
+    position: Point  # центр строки чата в координатах окна
+
+
+class Message(NamedTuple):
+    """Сообщение в ленте открытого чата."""
+
+    text: str                # текст сообщения
+    time: datetime | None    # разобранное время (None, если не распознано)
+
+
 class ViberWindow:
     """Высокоуровневые действия с окном Viber."""
 
-    
+    # Направления скролла (дублируются из конфига для удобства вызова)
+    SCROLL_UP = cfg.SCROLL_UP
+    SCROLL_DOWN = cfg.SCROLL_DOWN
+
     def __init__(self, title: str = cfg.WINDOW_TITLE) -> None:
         self.title = title
 
     # ------------------------------------------------------------------
-    # Приватные помощники (геометрия и фокус окна)
+    # Окно
     # ------------------------------------------------------------------
+
+    def activate(self) -> None:
+        """Вывести окно Viber на передний план (развернув, если свёрнуто)."""
+        window = self._window()
+        ScreenAnalyzer.activate_window(window)
+        time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
 
     def _window(self):
         """Найти окно Viber (и развернуть, если свёрнуто)."""
@@ -51,16 +88,7 @@ class ViberWindow:
         if window.isMinimized:
             window.restore()
             time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
-        elif not window.isActive:
-            window.activate()
-            time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
         return window
-
-    def _activate(self) -> None:
-        """Вывести окно Viber на передний план."""
-        window = self._window()
-        ScreenAnalyzer.activate_window(window)
-        time.sleep(cfg.WINDOW_ACTIVATE_DELAY)
 
     def _window_rect(self) -> Tuple[int, int, int, int]:
         """Прямоугольник окна: (left, top, width, height) в координатах экрана."""
@@ -71,29 +99,19 @@ class ViberWindow:
         """Перевести зону из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
         x, y, width, height = zone
-        return left + x, top + 30 + y, width, height
+        return left + x, top + y, width, height
 
-    def _abs_pnt(self, point: Tuple[int, int]) -> Tuple[int, int]:
+    def _absolute_point(self, point: Point) -> Point:
         """Перевести точку из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
-        return left + point[0], top + 30 + point[1]
-
-    def _scroll(self, point: Tuple[int, int], direction: int, amount: int) -> None:
-        """Прокрутить колёсиком над точкой окна и дать списку перерисоваться."""
-        x, y = self._abs_pnt(point)
-        ScreenAnalyzer.scroll_at(x, y, direction, amount)
-        time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        return left + point[0], top + point[1]
 
     # ------------------------------------------------------------------
     # 1. Новые сообщения
     # ------------------------------------------------------------------
 
     def has_new_messages(self) -> bool:
-        """Проверить, есть ли новые сообщения (пиксели цвета кружка в зоне).
-        Прокручивает наверх список чатов, проверяет наличие кружка"""
-
-        self.scroll_chats_to_up()
-            
+        """Проверить, есть ли новые сообщения (пиксели цвета бейджа в зоне)."""
         x, y, width, height = self._absolute_zone(cfg.NEW_MESSAGES_ZONE)
         return ScreenAnalyzer.has_color_in_region(
             x,
@@ -104,6 +122,15 @@ class ViberWindow:
             cfg.NEW_MESSAGE_COLOR_TOLERANCE,
             cfg.NEW_MESSAGE_MIN_PIXELS,
         )
+
+    def find_unread_chat_positions(self) -> List[Point]:
+        """Найти чаты с кружком новых сообщений на текущем экране.
+
+        Returns:
+            Центры строк чатов с кружком (координаты окна), сверху вниз.
+            Пустой список, если кружков на экране нет.
+        """
+        return []  # TODO: сканировать CHAT_LIST_ZONE на цвет кружка, группировать по строкам
 
     # ------------------------------------------------------------------
     # 2. Список чатов
@@ -153,6 +180,40 @@ class ViberWindow:
             cury += cfg.CHAT_RECORD_HEIGHT  # переходим к следующей строке чата
         return chat_list
 
+    def find_chat(self, name: str) -> ChatEntry | None:
+        """Найти чат с указанным именем среди видимых на экране.
+
+        Args:
+            name: имя чата (точное или частичное совпадение — решить при реализации).
+
+        Returns:
+            Найденный чат или None, если на экране его нет (тогда нужно
+            прокрутить список и повторить поиск).
+        """
+        return None  # TODO: перебрать get_chat_list() и сравнить имена
+
+    def get_chat_name(self, position: Point) -> str:
+        """Имя чата по позиции его строки: правый клик -> «Копировать» -> буфер.
+
+        Args:
+            position: центр строки чата в координатах окна
+                (из find_unread_chat_positions() или get_chat_list()).
+
+        Returns:
+            Имя чата или "", если скопировать не удалось.
+        """
+        return ""  # TODO: правый клик -> пункт cfg.COPY_MENU_ITEM -> чтение буфера
+
+    def get_opened_chat_name(self) -> str:
+        """Имя открытого чата (заголовок переписки).
+
+        Используется в обходном пути «открыть каждый чат и проверить имя».
+
+        Returns:
+            Имя открытого чата или "", если получить не удалось.
+        """
+        return ""  # TODO: копирование из заголовка переписки (правый клик / OCR)
+
     # ------------------------------------------------------------------
     # 3. Скролл списка чатов
     # ------------------------------------------------------------------
@@ -161,44 +222,37 @@ class ViberWindow:
         """Прокрутить список чатов вверх/вниз (колёсико над списком чатов)."""
         self._scroll(cfg.CHATS_SCROLL_POINT, direction, amount)
 
-    def scroll_chats_to_up(self):
-        #проверить, что кнопка вверх списка чатов видна (т.е. список не прокручен до верха)
-        x, y, width, height = self._absolute_zone(cfg.BUTTON_UP_ZONE)
-        if not ScreenAnalyzer.has_color_in_region(
-            x, y, width, height,
-            cfg.BUTTON_UP_COLOR,
-            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
-            cfg.BUTTON_UP_MIN_PIXELS,
-        ):
-            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
-                self._scroll(cfg.CHATS_SCROLL_POINT, SCROLL_UP, cfg.SCROLL_AMOUNT)
-                time.sleep(cfg.SCROLL_SETTLE_DELAY)
-        else:
-            #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
-            x, y = self._abs_pnt(cfg.BUTTON_UP)
-            ScreenAnalyzer.click_in_place(x, y)
-
-        time.sleep(cfg.SCROLL_SETTLE_DELAY)
-
     # ------------------------------------------------------------------
     # 4. Скролл ленты сообщений
     # ------------------------------------------------------------------
 
     def scroll_messages(self, direction: int, amount: int = cfg.SCROLL_AMOUNT) -> None:
         """Прокрутить ленту сообщений вверх/вниз (колёсико над лентой)."""
-        #TODO: очень плохо работает, совсем мало прокручивает.
         self._scroll(cfg.MESSAGES_SCROLL_POINT, direction, amount)
 
+    def scroll_messages_to_bottom(self) -> None:
+        """Поставить ленту в самый конец нажатием кнопки «вниз до конца»."""
+        pass  # TODO: клик по кнопке (её зона/цвет — в viber_config)
+
     # ------------------------------------------------------------------
-    # 5. Текст сообщений (заглушка)
+    # 5. Текст сообщений
     # ------------------------------------------------------------------
 
-    def get_messages_text(self) -> List[str]:
-        """Получить тексты сообщений открытого чата.
+    def get_messages(self, since: datetime | None = None) -> List[Message]:
+        """Сообщения открытого чата, от старых к новым.
 
-        Заглушка: алгоритм распознавания будет реализован позже.
+        Чтение идёт снизу вверх, пока не будет достигнуто уже известное
+        сообщение (граница `since`) — чтобы не читать обработанное ранее.
+
+        Args:
+            since: если задан — возвращаются только сообщения новее этого
+                времени; None — все видимые сообщения.
+
+        Returns:
+            Список сообщений (text + time), от старых к новым.
+            Заглушка: алгоритм распознавания будет реализован позже.
         """
-        return []  # TODO: реализовать получение текста сообщений
+        return []  # TODO: OCR ленты снизу вверх до границы since
 
     # ------------------------------------------------------------------
     # 6. Отправка сообщения
@@ -212,7 +266,7 @@ class ViberWindow:
         if not text:
             return
 
-        self._activate()
+        self.activate()
 
         # Клик по полю ввода, чтобы перевести фокус в него
         x, y, width, height = self._absolute_zone(cfg.MESSAGE_INPUT_ZONE)
@@ -222,26 +276,86 @@ class ViberWindow:
         ScreenAnalyzer.type_text_clipboard(text)
         time.sleep(cfg.SEND_KEY_DELAY)
 
-        ScreenAnalyzer.press_key("enter")
+        ScreenAnalyzer.press_key(cfg.SUBMIT_KEY)
+
+    def type_message(self, text: str) -> None:
+        """Ввести текст в поле ввода, НЕ отправляя его.
+
+        Нужен для проверки (get_input_text) перед submit_message().
+
+        Заглушка: после реализации send_message() можно собирать из
+        type_message() + submit_message(), чтобы не дублировать код.
+        """
+        pass  # TODO: клик по полю ввода + type_text_clipboard()
+
+    def submit_message(self) -> None:
+        """Отправить то, что набрано в поле ввода (Enter)."""
+        pass  # TODO: press_key(cfg.SUBMIT_KEY)
+
+    def get_input_text(self) -> str:
+        """Прочитать текст, набранный в поле ввода (Ctrl+A -> Ctrl+C -> буфер).
+
+        Внимание: буфер обмена затирается — серверный текст нужно сохранить
+        заранее (до type_message).
+
+        Returns:
+            Набранный текст или "", если прочитать не удалось.
+        """
+        return ""  # TODO: выделить всё в поле ввода и скопировать
+
+    def is_message_sent(self, text: str) -> bool:
+        """Проверить, что сообщение с таким текстом появилось в ленте.
+
+        TODO из алгоритма: проверка статуса отправленного сообщения.
+
+        Returns:
+            True, если последнее сообщение в ленте совпадает с `text`.
+        """
+        return False  # TODO: прочитать последнее сообщение ленты и сравнить
 
     # ------------------------------------------------------------------
-    # 7. Клик по чату (заглушка)
+    # 7. Клик по чату
     # ------------------------------------------------------------------
 
     def click_chat(self, chat: str) -> bool:
-        """Кликнуть по чату из списка, чтобы открыть его.
+        """Кликнуть по чату с указанным именем, чтобы открыть его.
 
-        Заглушка: алгоритм поиска чата будет реализован позже.
+        Ищет только среди видимых на экране чатов (find_chat); если чата нет
+        на экране — вернуть False, а вызывающий код прокрутит список и повторит.
+
+        Returns:
+            True, если чат найден и по нему кликнули.
         """
-        return False  # TODO: реализовать поиск и клик по нужному чату
+        return False  # TODO: find_chat() + клик по позиции строки
+
+    def click_chat_at(self, position: Point) -> bool:
+        """Кликнуть по строке чата в указанной позиции.
+
+        Args:
+            position: центр строки чата в координатах окна.
+
+        Returns:
+            True, если позиция внутри зоны списка чатов и клик выполнен.
+        """
+        return False  # TODO: проверить, что позиция внутри CHAT_LIST_ZONE, и кликнуть
+
+    # ------------------------------------------------------------------
+    # Приватные помощники
+    # ------------------------------------------------------------------
+
+    def _scroll(self, point: Point, direction: int, amount: int) -> None:
+        """Прокрутить колёсиком над точкой окна и дать списку перерисоваться."""
+        x, y = self._absolute_point(point)
+        ScreenAnalyzer.scroll_at(x, y, direction, amount)
+        time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
 
 if __name__ == "__main__":
     # Быстрая проверка: окно найдено, зона новых сообщений работает
-    time.sleep(20)
     viber = ViberWindow()
+    viber.activate()
     print(f"Окно '{viber.title}': {viber._window_rect()}")
-    print(f"Зона новых сообщений (экран): {viber._absolute_zone(cfg.NEW_MESSAGES_ZONE)}")
     print(f"Есть новые сообщения: {viber.has_new_messages()}")
-    print(f"Чаты: {viber.get_chat_list()}")
-    print(f"Сообщения (заглушка): {viber.get_messages_text()}")
+    print(f"Позиции непрочитанных (заглушка): {viber.find_unread_chat_positions()}")
+    print(f"Чаты на экране (заглушка): {viber.get_chat_list()}")
+    print(f"Сообщения (заглушка): {viber.get_messages()}")
