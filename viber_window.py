@@ -73,14 +73,14 @@ class ViberWindow:
         x, y, width, height = zone
         return left + x, top + 30 + y, width, height
 
-    def _absolute_point(self, point: Tuple[int, int]) -> Tuple[int, int]:
+    def _abs_pnt(self, point: Tuple[int, int]) -> Tuple[int, int]:
         """Перевести точку из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
         return left + point[0], top + 30 + point[1]
 
     def _scroll(self, point: Tuple[int, int], direction: int, amount: int) -> None:
         """Прокрутить колёсиком над точкой окна и дать списку перерисоваться."""
-        x, y = self._absolute_point(point)
+        x, y = self._abs_pnt(point)
         ScreenAnalyzer.scroll_at(x, y, direction, amount)
         time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
@@ -92,23 +92,7 @@ class ViberWindow:
         """Проверить, есть ли новые сообщения (пиксели цвета кружка в зоне).
         Прокручивает наверх список чатов, проверяет наличие кружка"""
 
-        #проверить, что кнопка вверх списка чатов видна (т.е. список не прокручен до верха)
-        x, y, width, height = self._absolute_zone(cfg.BUTTON_UP_ZONE)
-        if not ScreenAnalyzer.has_color_in_region(
-            x, y, width, height,
-            cfg.BUTTON_UP_COLOR,
-            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
-            cfg.BUTTON_UP_MIN_PIXELS,
-        ):
-            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
-                self._scroll(cfg.CHATS_SCROLL_POINT, SCROLL_UP, cfg.SCROLL_AMOUNT)
-                time.sleep(cfg.SCROLL_SETTLE_DELAY)
-        else:
-            #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
-            x, y = self._absolute_point(cfg.BUTTON_UP)
-            ScreenAnalyzer.click_in_place(x, y)
-
-        time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        self.scroll_chats_to_up()
             
         x, y, width, height = self._absolute_zone(cfg.NEW_MESSAGES_ZONE)
         return ScreenAnalyzer.has_color_in_region(
@@ -122,7 +106,7 @@ class ViberWindow:
         )
 
     # ------------------------------------------------------------------
-    # 2. Список чатов (заглушка)
+    # 2. Список чатов
     # ------------------------------------------------------------------
 
     def get_chat_list(self) -> List[str]:
@@ -143,8 +127,8 @@ class ViberWindow:
             20,
         ):
             #кликнуть по кнопке закрытия поля с днюхой (кнопка крестик в правом верхнем углу поля)
-            print("Закрываем поле с днюхой")
-            ScreenAnalyzer.click_in_place(*self._absolute_point(cfg.BUTTON_CLOSE_HOLIDAY_FIELD))
+            print("Закрываем поле с днюхой")    #TODO: ложные сработки бывают, доработать
+            ScreenAnalyzer.click_in_place(*self._abs_pnt(cfg.BUTTON_CLOSE_HOLIDAY_FIELD))
             time.sleep(cfg.CLICK_DEFAULT_DELAY)
 
         #теперь список чатов. Высота строки чата - 72 px. Сканируем список чатов сверху вниз, пока не дойдём до конца зоны списка чатов
@@ -176,6 +160,25 @@ class ViberWindow:
     def scroll_chats(self, direction: int, amount: int = cfg.SCROLL_AMOUNT) -> None:
         """Прокрутить список чатов вверх/вниз (колёсико над списком чатов)."""
         self._scroll(cfg.CHATS_SCROLL_POINT, direction, amount)
+
+    def scroll_chats_to_up(self):
+        #проверить, что кнопка вверх списка чатов видна (т.е. список не прокручен до верха)
+        x, y, width, height = self._absolute_zone(cfg.BUTTON_UP_ZONE)
+        if not ScreenAnalyzer.has_color_in_region(
+            x, y, width, height,
+            cfg.BUTTON_UP_COLOR,
+            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
+            cfg.BUTTON_UP_MIN_PIXELS,
+        ):
+            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
+                self._scroll(cfg.CHATS_SCROLL_POINT, SCROLL_UP, cfg.SCROLL_AMOUNT)
+                time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        else:
+            #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
+            x, y = self._abs_pnt(cfg.BUTTON_UP)
+            ScreenAnalyzer.click_in_place(x, y)
+
+        time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
     # ------------------------------------------------------------------
     # 4. Скролл ленты сообщений
@@ -235,6 +238,7 @@ class ViberWindow:
 
 if __name__ == "__main__":
     # Быстрая проверка: окно найдено, зона новых сообщений работает
+    time.sleep(20)
     viber = ViberWindow()
     print(f"Окно '{viber.title}': {viber._window_rect()}")
     print(f"Зона новых сообщений (экран): {viber._absolute_zone(cfg.NEW_MESSAGES_ZONE)}")
