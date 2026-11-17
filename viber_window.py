@@ -34,7 +34,7 @@ import pyautogui
 
 import viber_config as cfg
 from ocr_screen import ScreenAnalyzer
-from viber_config import Point
+from viber_config import CHAT_LIST_HOLIDAY_FIELD, Point
 
 import logging
 
@@ -105,7 +105,8 @@ class ViberWindow:
         """Перевести зону из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
         x, y, width, height = zone
-        return left + x, top + y, width, height
+        #корректировка в 30 для строки заголовка окна
+        return left + x, top + 30 + y, width, height
 
     def _abs_pnt(self, point: Point) -> Point:
         """Перевести точку из координат окна в координаты экрана."""
@@ -113,6 +114,20 @@ class ViberWindow:
         #корректировка в 30 для строки заголовка окна
         return left + point[0], top + 30 + point[1]
 
+    def close_holiday(self):
+        #проверяем что есть полоска с днюхой и кликаем по закрытию
+        #TODO: реализовать
+        color_matches = ScreenAnalyzer.has_color_in_region(
+            *self._absolute_zone(CHAT_LIST_HOLIDAY_FIELD),
+            cfg.HOLIDAY_COLOR,
+            cfg.HOLIDAY_COLOR_TOLERANCE,
+            cfg.HOLIDAY_MIN_PIXELS
+        )
+        if color_matches:
+            x, y = self._abs_pnt(cfg.BUTTON_CLOSE_HOLIDAY_FIELD)
+            ScreenAnalyzer.click_in_place(x, y)
+            time.sleep(cfg.CLICK_SETTLE_DELAY)
+        
     # ------------------------------------------------------------------
     # 1. Новые сообщения
     # ------------------------------------------------------------------
@@ -167,18 +182,7 @@ class ViberWindow:
         поле с днюхами 40 px, цвет 115, 96, 242
 
         """
-        #проверить, что нет поля с днюхой. Если есть, то закрыть его, подождать полескунды, и потом уже сканировать список чатов
-        x, y, width, height = self._absolute_zone(cfg.CHAT_LIST_HOLIDAY_FIELD)
-        if ScreenAnalyzer.has_color_in_region(
-            x, y, width, 40,
-            cfg.COLOR_CHAT_LIST_HOLIDAY_FIELD,
-            cfg.DEFAULT_COLOR_TOLERANCE,
-            20,
-        ):
-            #кликнуть по кнопке закрытия поля с днюхой (кнопка крестик в правом верхнем углу поля)
-            print("Закрываем поле с днюхой")    #TODO: ложные сработки бывают, доработать
-            ScreenAnalyzer.click_in_place(*self._abs_pnt(cfg.BUTTON_CLOSE_HOLIDAY_FIELD))
-            time.sleep(cfg.CLICK_DEFAULT_DELAY)
+        self.close_holiday()  #закрыть поле с днюхами, если оно есть
 
         #теперь список чатов. Высота строки чата - 72 px. Сканируем список чатов сверху вниз, пока не дойдём до конца зоны списка чатов
         cury = 0

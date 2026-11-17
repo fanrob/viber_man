@@ -10,7 +10,11 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     logger.info("Запуск основного цикла...")
     while True:
+        # приводим окно к базовому состоянию
+        viber.activate()
         viber.scroll_chats_to_up()
+        viber.close_holiday()
+        quit()
         logger.info("Проверка новых сообщений...")
         if viber.has_new_messages():
             logger.info("Новые сообщения обнаружены.")
