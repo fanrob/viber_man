@@ -30,10 +30,16 @@ import time
 from datetime import datetime
 from typing import List, NamedTuple, Tuple
 
+import pyautogui
+
 import viber_config as cfg
 from ocr_screen import ScreenAnalyzer
 from viber_config import Point
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ViberWindowError(RuntimeError):
     """Базовая ошибка взаимодействия с окном Viber."""
@@ -101,10 +107,11 @@ class ViberWindow:
         x, y, width, height = zone
         return left + x, top + y, width, height
 
-    def _absolute_point(self, point: Point) -> Point:
+    def _abs_pnt(self, point: Point) -> Point:
         """Перевести точку из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
-        return left + point[0], top + point[1]
+        #корректировка в 30 для строки заголовка окна
+        return left + point[0], top + 30 + point[1]
 
     # ------------------------------------------------------------------
     # 1. Новые сообщения
@@ -113,6 +120,19 @@ class ViberWindow:
     def has_new_messages(self) -> bool:
         """Проверить, есть ли новые сообщения (пиксели цвета бейджа в зоне)."""
         x, y, width, height = self._absolute_zone(cfg.NEW_MESSAGES_ZONE)
+        return ScreenAnalyzer.has_color_in_region(
+            x,
+            y,
+            width,
+            height,
+            cfg.NEW_MESSAGE_COLOR,
+            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
+            cfg.NEW_MESSAGE_MIN_PIXELS,
+        )
+
+    def check_has_new_messages(self, position: Point) -> bool:
+        """Проверить, есть ли новые сообщения в указанной зоне."""
+        x, y, width, height = self._absolute_zone((position[0], position[1], cfg.NEW_MESSAGE_ZONE_WIDTH, cfg.NEW_MESSAGE_ZONE_HEIGHT))
         return ScreenAnalyzer.has_color_in_region(
             x,
             y,
@@ -138,6 +158,8 @@ class ViberWindow:
 
     def get_chat_list(self) -> List[str]:
         """Получить список чатов на текущем экране.
+        Возвращает список имён чатов (распознанных или скопированных), сверху вниз.
+        Массив чатов с полями name и has_new_message (наличие кружка новых сообщений).
 
         Учесть в списки чатов поле с днюхами, поле с рекламой
         Высота строчки чата - 72 пикс
@@ -172,7 +194,9 @@ class ViberWindow:
                                       cfg.CHAT_HEADER_COORD[2], 
                                       cfg.CHAT_HEADER_COORD[3]))
             )
-            chat_list.append(chat_name)
+            has_new_message = self.check_has_new_messages((cfg.CHAT_LIST_ZONE[0]+cfg.CHAT_HEADER_COORD[0], 
+                                                           cfg.CHAT_LIST_ZONE[1] + cury + cfg.CHAT_HEADER_COORD[1]))
+            chat_list.append(ChatEntry(name=chat_name, has_new_message=has_new_message))
 
             # TODO: если имя чата пустое, то открыть чат, и скопировать имя чата через правое меню и вставить из буфера. 
             #           Обязательно проверить, не прочитали ли случайно новые сообщения!!!
@@ -221,6 +245,25 @@ class ViberWindow:
     def scroll_chats(self, direction: int, amount: int = cfg.SCROLL_AMOUNT) -> None:
         """Прокрутить список чатов вверх/вниз (колёсико над списком чатов)."""
         self._scroll(cfg.CHATS_SCROLL_POINT, direction, amount)
+
+    def scroll_chats_to_up(self):
+        #проверить, что кнопка вверх списка чатов видна (т.е. список не прокручен до верха)
+        x, y, width, height = self._absolute_zone(cfg.BUTTON_UP_ZONE)
+        if not ScreenAnalyzer.has_color_in_region(
+            x, y, width, height,
+            cfg.BUTTON_UP_COLOR,
+            cfg.NEW_MESSAGE_COLOR_TOLERANCE,
+            cfg.BUTTON_UP_MIN_PIXELS,
+        ):
+            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
+                self._scroll(cfg.CHATS_SCROLL_POINT, cfg.SCROLL_UP, cfg.SCROLL_AMOUNT)
+                time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        else:
+            #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
+            x, y = self._abs_pnt(cfg.BUTTON_UP)
+            ScreenAnalyzer.click_in_place(x, y)
+
+        time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
     # ------------------------------------------------------------------
     # 4. Скролл ленты сообщений
@@ -345,17 +388,39 @@ class ViberWindow:
 
     def _scroll(self, point: Point, direction: int, amount: int) -> None:
         """Прокрутить колёсиком над точкой окна и дать списку перерисоваться."""
-        x, y = self._absolute_point(point)
+        logger.info("Прокрутка списка чатов...")
+        x, y = self._abs_pnt(point)
         ScreenAnalyzer.scroll_at(x, y, direction, amount)
         time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
 
 if __name__ == "__main__":
     # Быстрая проверка: окно найдено, зона новых сообщений работает
-    viber = ViberWindow()
-    viber.activate()
-    print(f"Окно '{viber.title}': {viber._window_rect()}")
-    print(f"Есть новые сообщения: {viber.has_new_messages()}")
-    print(f"Позиции непрочитанных (заглушка): {viber.find_unread_chat_positions()}")
-    print(f"Чаты на экране (заглушка): {viber.get_chat_list()}")
-    print(f"Сообщения (заглушка): {viber.get_messages()}")
+    pyautogui.FAILSAFE = False
+    
+    TEST = 1
+    if TEST == 1:
+        logger.info("Тестирование ViberWindow...")
+        viber = ViberWindow()
+        viber.activate()
+        print(f"Окно '{viber.title}': {viber._window_rect()}")
+        print(f"Есть новые сообщения: {viber.has_new_messages()}")
+        print(f"Позиции непрочитанных (заглушка): {viber.find_unread_chat_positions()}")
+        print(f"Чаты на экране (заглушка): {viber.get_chat_list()}")
+        print(f"Сообщения (заглушка): {viber.get_messages()}")
+
+        #тестовый цикл сканирования чатов и получения их имён
+        while True:
+            try:
+                viber.activate()
+                chat_list = viber.get_chat_list()
+                print(f"Чаты на экране: {chat_list}")
+                time.sleep(5)
+                #прокуртить список чатов вниз
+                viber.scroll_chats(ViberWindow.SCROLL_DOWN, 50)
+                #сделать скрин списка чатов и сохранить в файл
+                x, y, width, height = viber._absolute_zone(cfg.CHAT_LIST_ZONE)
+                ScreenAnalyzer.capture_region(x, y, width, height).save(f"chat_list_{time.time()}.png")
+            except: 
+                pass
+    

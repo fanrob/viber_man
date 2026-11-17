@@ -1,12 +1,35 @@
 import ocr_screen
 import viber_window
+import logging
 
 
-
-
+viber = viber_window.ViberWindow()
 
 if __name__ == "__main__":
-    print ('done')
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.info("Запуск основного цикла...")
+    while True:
+        viber.scroll_chats_to_up()
+        logger.info("Проверка новых сообщений...")
+        if viber.has_new_messages():
+            logger.info("Новые сообщения обнаружены.")
+            lines = viber.get_chat_list()   #получаем список чатов на экране вместе с фиолетовыми кружками
+            for line in lines:
+                if line.has_new_message:
+                    logger.info(f"Найден чат с новым сообщением: {line.chat_name}")
+                    viber.click_chat(line)
+                    chat_name = viber.get_chat_name()
+                    logger.info(f"Открыт чат: {chat_name}")
+                    viber.scroll_chat_to_bottom()
+                    new_messages = viber.get_new_messages()
+                    for message in new_messages:
+                        logger.info(f"Новое сообщение: {message}")
+                        # Отправляем сообщение на сервер (TODO: логика отправки на сервер не реализована)
+
+
+
+
 
 '''
 главный цикл: 
