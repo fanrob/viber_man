@@ -134,7 +134,7 @@ class ViberWindow:
 
     def has_new_messages(self) -> bool:
         """Проверить, есть ли новые сообщения (пиксели цвета бейджа в зоне)."""
-        x, y, width, height = self._absolute_zone(cfg.NEW_MESSAGES_ZONE)
+        x, y, width, height = self._absolute_zone(cfg.FULL_NEW_MESSAGES_ZONE)
         return ScreenAnalyzer.has_color_in_region(
             x,
             y,

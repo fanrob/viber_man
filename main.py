@@ -14,11 +14,14 @@ if __name__ == "__main__":
         viber.activate()
         viber.scroll_chats_to_up()
         viber.close_holiday()
-        quit()
         logger.info("Проверка новых сообщений...")
         if viber.has_new_messages():
             logger.info("Новые сообщения обнаружены.")
             lines = viber.get_chat_list()   #получаем список чатов на экране вместе с фиолетовыми кружками
+        quit()
+
+
+'''
             for line in lines:
                 if line.has_new_message:
                     logger.info(f"Найден чат с новым сообщением: {line.chat_name}")
@@ -30,7 +33,7 @@ if __name__ == "__main__":
                     for message in new_messages:
                         logger.info(f"Новое сообщение: {message}")
                         # Отправляем сообщение на сервер (TODO: логика отправки на сервер не реализована)
-
+'''
 
 
 
