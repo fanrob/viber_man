@@ -34,7 +34,7 @@ import pyautogui
 
 import viber_config as cfg
 from ocr_screen import ScreenAnalyzer
-from viber_config import CHAT_LIST_HOLIDAY_FIELD, Point
+from viber_config import CHAT_LIST_HOLIDAY_FIELD, CORRECTION_X, CORRECTION_Y, MESSAGES_SCROLL_BUTTON_ZONE, NEW_MESSAGES_ZONE, Point
 
 import logging
 
@@ -53,7 +53,8 @@ class ChatEntry(NamedTuple):
     """Чат в списке на экране."""
 
     name: str        # имя чата (распознано или скопировано)
-    position: Point  # центр строки чата в координатах окна
+    position: Point  # левый верхний угол строки чата в координатах окна
+    has_new_message: bool  # есть ли кружок новых сообщений у чата
 
 
 class Message(NamedTuple):
@@ -106,17 +107,16 @@ class ViberWindow:
         left, top, _, _ = self._window_rect()
         x, y, width, height = zone
         #корректировка в 30 для строки заголовка окна
-        return left + x, top + 30 + y, width, height
+        return left + CORRECTION_X + x, top + CORRECTION_Y + y, width, height
 
     def _abs_pnt(self, point: Point) -> Point:
         """Перевести точку из координат окна в координаты экрана."""
         left, top, _, _ = self._window_rect()
         #корректировка в 30 для строки заголовка окна
-        return left + point[0], top + 30 + point[1]
+        return left + CORRECTION_X + point[0], top + CORRECTION_Y + point[1]
 
     def close_holiday(self):
         #проверяем что есть полоска с днюхой и кликаем по закрытию
-        #TODO: реализовать
         color_matches = ScreenAnalyzer.has_color_in_region(
             *self._absolute_zone(CHAT_LIST_HOLIDAY_FIELD),
             cfg.HOLIDAY_COLOR,
@@ -124,6 +124,7 @@ class ViberWindow:
             cfg.HOLIDAY_MIN_PIXELS
         )
         if color_matches:
+            print("Полоска с днюхой обнаружена, закрываем...")
             x, y = self._abs_pnt(cfg.BUTTON_CLOSE_HOLIDAY_FIELD)
             ScreenAnalyzer.click_in_place(x, y)
             time.sleep(cfg.CLICK_SETTLE_DELAY)
@@ -146,8 +147,12 @@ class ViberWindow:
         )
 
     def check_has_new_messages(self, position: Point) -> bool:
-        """Проверить, есть ли новые сообщения в указанной зоне."""
-        x, y, width, height = self._absolute_zone((position[0], position[1], cfg.NEW_MESSAGE_ZONE_WIDTH, cfg.NEW_MESSAGE_ZONE_HEIGHT))
+        """Проверить, есть ли новые сообщения в указанной зоне. 
+            На вход подаётся координата левого верхнего угла строки чата (относительно окна Viber)."""
+        x, y, width, height = self._absolute_zone((position[0]+NEW_MESSAGES_ZONE[0], 
+                                                   position[1]+NEW_MESSAGES_ZONE[1], 
+                                                   NEW_MESSAGES_ZONE[2], 
+                                                   NEW_MESSAGES_ZONE[3]))
         return ScreenAnalyzer.has_color_in_region(
             x,
             y,
@@ -171,7 +176,7 @@ class ViberWindow:
     # 2. Список чатов
     # ------------------------------------------------------------------
 
-    def get_chat_list(self) -> List[str]:
+    def get_chat_list(self) -> List[ChatEntry]:
         """Получить список чатов на текущем экране.
         Возвращает список имён чатов (распознанных или скопированных), сверху вниз.
         Массив чатов с полями name и has_new_message (наличие кружка новых сообщений).
@@ -183,6 +188,10 @@ class ViberWindow:
 
         """
         self.close_holiday()  #закрыть поле с днюхами, если оно есть
+
+        #сдвинуть мышку вправо, чтобы не мешала сканированию списка чатов
+        x, y, width, height = self._absolute_zone(cfg.CHAT_LIST_ZONE)
+        ScreenAnalyzer.move_mouse_to(x + width + 30, y + height // 2, duration=0.4)
 
         #теперь список чатов. Высота строки чата - 72 px. Сканируем список чатов сверху вниз, пока не дойдём до конца зоны списка чатов
         cury = 0
@@ -198,9 +207,11 @@ class ViberWindow:
                                       cfg.CHAT_HEADER_COORD[2], 
                                       cfg.CHAT_HEADER_COORD[3]))
             )
-            has_new_message = self.check_has_new_messages((cfg.CHAT_LIST_ZONE[0]+cfg.CHAT_HEADER_COORD[0], 
-                                                           cfg.CHAT_LIST_ZONE[1] + cury + cfg.CHAT_HEADER_COORD[1]))
-            chat_list.append(ChatEntry(name=chat_name, has_new_message=has_new_message))
+            has_new_message = self.check_has_new_messages((cfg.CHAT_LIST_ZONE[0], 
+                                                           cfg.CHAT_LIST_ZONE[1] + cury))
+            chat_list.append(ChatEntry(name=chat_name, 
+                                       position=(cfg.CHAT_LIST_ZONE[0]+cfg.CHAT_HEADER_COORD[0], cfg.CHAT_LIST_ZONE[1] + cury + cfg.CHAT_HEADER_COORD[1]),
+                                       has_new_message=has_new_message))
 
             # TODO: если имя чата пустое, то открыть чат, и скопировать имя чата через правое меню и вставить из буфера. 
             #           Обязательно проверить, не прочитали ли случайно новые сообщения!!!
@@ -240,6 +251,8 @@ class ViberWindow:
         Returns:
             Имя открытого чата или "", если получить не удалось.
         """
+        ScreenAnalyzer.move_mouse_to(*self._abs_pnt(cfg.OPENED_CHAT_NAME_ZONE))
+
         return ""  # TODO: копирование из заголовка переписки (правый клик / OCR)
 
     # ------------------------------------------------------------------
@@ -269,6 +282,8 @@ class ViberWindow:
 
         time.sleep(cfg.SCROLL_SETTLE_DELAY)
 
+
+
     # ------------------------------------------------------------------
     # 4. Скролл ленты сообщений
     # ------------------------------------------------------------------
@@ -279,7 +294,15 @@ class ViberWindow:
 
     def scroll_messages_to_bottom(self) -> None:
         """Поставить ленту в самый конец нажатием кнопки «вниз до конца»."""
-        pass  # TODO: клик по кнопке (её зона/цвет — в viber_config)
+
+        x, y, width, height = self._absolute_zone(cfg.MESSAGES_SCROLL_BUTTON_ZONE)
+        if ScreenAnalyzer.has_color_in_region(
+            x, y, width, height,
+            cfg.DEFAULT_VIOL_COLOR,
+            0,
+            cfg.BUTTON_DOWN_MIN_PIXELS,
+        ):
+            ScreenAnalyzer.click_in_place(*self._abs_pnt(cfg.MESSAGES_SCROLL_POINT))
 
     # ------------------------------------------------------------------
     # 5. Текст сообщений

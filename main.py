@@ -18,22 +18,23 @@ if __name__ == "__main__":
         if viber.has_new_messages():
             logger.info("Новые сообщения обнаружены.")
             lines = viber.get_chat_list()   #получаем список чатов на экране вместе с фиолетовыми кружками
-        quit()
-
-
-'''
+         
             for line in lines:
                 if line.has_new_message:
+                    #проверяем, что имя чата корректно и узнаем точное имя чата
+                    viber.open_chat(line.position)
+
+                    cchat_name = viber.get_opened_chat_name()       #точное имя чата, которое будем писать в БД
                     logger.info(f"Найден чат с новым сообщением: {line.chat_name}")
-                    viber.click_chat(line)
-                    chat_name = viber.get_chat_name()
-                    logger.info(f"Открыт чат: {chat_name}")
-                    viber.scroll_chat_to_bottom()
+                    
+                    
+                    logger.info(f"Открыт чат: {cchat_name}")
+                    viber.scroll_messages_to_bottom()
                     new_messages = viber.get_new_messages()
                     for message in new_messages:
                         logger.info(f"Новое сообщение: {message}")
                         # Отправляем сообщение на сервер (TODO: логика отправки на сервер не реализована)
-'''
+
 
 
 

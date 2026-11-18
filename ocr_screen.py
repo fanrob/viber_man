@@ -121,6 +121,7 @@ class ScreenAnalyzer:
     ) -> int:
         """Сколько пикселей области совпадают с target_color (с допуском)."""
         image = ScreenAnalyzer.capture_region(x, y, width, height)
+        image.save(f"region_{int(time.time() * 1000)}.png")  # для отладки
         return sum(
             1
             for pixel in image.getdata()
@@ -170,6 +171,12 @@ class ScreenAnalyzer:
     def click_in_place(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.0) -> None:
         """Кликнуть левой/правой кнопкой мыши в указанное место."""
         pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
+        return
+
+    @staticmethod
+    def move_mouse_to(x: int, y: int, duration: float = 0.0) -> None:
+        """Переместить мышь в указанное место за duration секунд."""
+        pyautogui.moveTo(x=x, y=y, duration=duration)
 
     @staticmethod
     def type_text(text: str, interval: float = 0.0) -> None:
