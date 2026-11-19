@@ -26,6 +26,7 @@ TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 OUTPUT_FILE = Path(__file__).with_name("output.txt")
 INTERVAL = 5  # секунд
 LANG = "rus+eng"
+DEBUG_SAVE_REGION = True  # сохранять снимки распознаваемых областей в region_*.png (отладка OCR)
 
 SCROLL_UP = 1
 SCROLL_DOWN = -1
@@ -73,7 +74,8 @@ class ScreenAnalyzer:
         _ensure_tesseract()
         image = ScreenAnalyzer.capture_region(x, y, width, height)
         text = pytesseract.image_to_string(image, lang=lang)
-        image.save(f"region_{int(time.time() * 1000)}.png")
+        if DEBUG_SAVE_REGION:
+            image.save(f"region_{int(time.time() * 1000)}.png")
         return text.strip()
 
     @staticmethod
@@ -121,7 +123,8 @@ class ScreenAnalyzer:
     ) -> int:
         """Сколько пикселей области совпадают с target_color (с допуском)."""
         image = ScreenAnalyzer.capture_region(x, y, width, height)
-        image.save(f"region_{int(time.time() * 1000)}.png")  # для отладки
+        if DEBUG_SAVE_REGION:
+            image.save(f"region_{int(time.time() * 1000)}.png")  # для отладки
         return sum(
             1
             for pixel in image.getdata()
@@ -173,6 +176,8 @@ class ScreenAnalyzer:
         pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
         return
 
+
+
     @staticmethod
     def move_mouse_to(x: int, y: int, duration: float = 0.0) -> None:
         """Переместить мышь в указанное место за duration секунд."""
@@ -197,6 +202,11 @@ class ScreenAnalyzer:
     def get_clipboard_text() -> str:
         """Прочитать текстовый содержимое буфера обмена ("" если буфер пуст/не текст)."""
         return pyperclip.paste() or ""
+
+    @staticmethod
+    def set_clipboard_text(text: str) -> None:
+        """Положить текст в буфер обмена (без ввода с клавиатуры)."""
+        pyperclip.copy(text)
 
     @staticmethod
     def press_key(key: str) -> None:
