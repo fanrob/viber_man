@@ -277,9 +277,8 @@ class ViberWindow:
             cfg.NEW_MESSAGE_COLOR_TOLERANCE,
             cfg.BUTTON_UP_MIN_PIXELS,
         ):
-            for _ in range(5):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
+            for _ in range(3):  # если кнопки вверх нет, то просто прокрутим вверх немного на всякий случай
                 self._scroll(cfg.CHATS_SCROLL_POINT, cfg.SCROLL_UP, cfg.SCROLL_AMOUNT)
-                time.sleep(cfg.SCROLL_SETTLE_DELAY)
         else:
             #нажать мышкой на кнопку вверх списка чатов, чтобы прокрутить наверх
             x, y = self._abs_pnt(cfg.BUTTON_UP)
@@ -352,9 +351,6 @@ class ViberWindow:
 
         # 1. активируем окно, держим фокус в ленте, прокручиваем в самый низ
         self.activate()
-        focus_x, focus_y = self._abs_pnt(cfg.MESSAGES_FOCUS_POINT)
-        ScreenAnalyzer.click_in_place(focus_x, focus_y)
-        time.sleep(cfg.CLICK_SETTLE_DELAY)
         self.scroll_messages_to_bottom()
 
         found: List[Message] = []   # порядок сбора: снизу вверх (новые -> старые)
@@ -396,8 +392,7 @@ class ViberWindow:
             if reached_old:
                 break
 
-            # фокус в ленте и на страницу назад — читаем более старые сообщения
-            ScreenAnalyzer.click_in_place(focus_x, focus_y)
+            # на страницу назад — читаем более старые сообщения
             ScreenAnalyzer.press_key(cfg.PAGE_UP_KEY)
             time.sleep(cfg.MESSAGES_PAGE_DELAY)
 
@@ -531,6 +526,10 @@ class ViberWindow:
 
         return datetime(day.year, day.month, day.day, hour, minute)
 
+    def _find_button_copy():
+        chat_image = ScreenAnalyzer()
+    
+
     def _copy_message_text(self, seg: _MessageSegment) -> str:
         """Скопировать текст сообщения: правый клик -> «Копировать» -> буфер.
 
@@ -546,10 +545,26 @@ class ViberWindow:
         ScreenAnalyzer.set_clipboard_text("")  # чтобы отличить неудачу от старого содержимого
         ScreenAnalyzer.move_mouse_to(x, y, duration=0.2)
         ScreenAnalyzer.click_in_place(x, y, button="right")
-        time.sleep(cfg.CLICK_SETTLE_DELAY)
+        
+        # теперь сложное: меню может выскочить в любом месте по оси Y, слева или справа от точки клика, в зависимости 
+        # от того, по моим пузырям или чужим.
+        # Также кнопка копировать может быть не на том месте, где мы ожидаем (например, если в сообщении есть картинка или файл)
+        # Поэтому мы кликаем правой кнопкой по сообщению, получаем картинку всей части окна с диалогом,
+        # ищем вдоль оси Y (X правее/левее на 10px чем клик) когда цвет пикселей сменится на цвет фона меню. 
+        # Так найдем верхнюю границу меню. Далее ищем вдоль оси Y, когда цвет фона меню обратно сменится на другой цвет 
+        # фона чата. Так найдем нижнюю границу меню. Нижняя границе может совпасть с границей окна, предусмотреть
+        # затем также вдоль оси X ищем начало и конец меню по фону (Y на 10px ниже точки клика)
+        # в полученых координатах распознаем текст. Убираем пустые строки. Получаем точное меню на экране
+        # Ищем текст Скопировать сообщение, узнаем номер строки. Множим номер строки на высоту строки (константа будет дана)
+        # и получаем Y нужно строки, делаем клик по середине по Y и на 20 px правее (или левее, если меню для моего сообщения)
 
-        menu_x = x + cfg.MESSAGE_COPY_MENU_OFFSET[0]
-        menu_y = y + cfg.MESSAGE_COPY_MENU_OFFSET[1]
+        menu_x, menu_y = self._find_button_copy()
+        
+
+
+
+
+
         ScreenAnalyzer.click_in_place(menu_x, menu_y)
         time.sleep(cfg.CLICK_SETTLE_DELAY)
         ScreenAnalyzer.press_key("esc")  # закрыть меню, если пункт не совпал
@@ -657,10 +672,26 @@ class ViberWindow:
 
 
 if __name__ == "__main__":
-    # Быстрая проверка: окно найдено, зона новых сообщений работает
     pyautogui.FAILSAFE = False
     
-    TEST = 2
+    TEST = 0.1
+
+    if TEST == 0:   #тест координат скрина экрана
+        viber = ViberWindow()
+        viber.activate()
+        time.sleep(cfg.SCROLL_SETTLE_DELAY)
+        x,y,w,h = viber._absolute_zone((0, 0, 300, 300))
+        ScreenAnalyzer.capture_region(x, y, w, h).save(f"test_{time.time()}.png")
+        pass
+
+    if TEST == 0.1:   #тест сканирования текста в зоне меню чата
+        viber = ViberWindow()
+        viber.activate()
+        time.sleep(5)   #за это время нужно открыть меню нижнего сообщения собеседника на первой букве
+        x,y,w,h = viber._absolute_zone((374,310,178,261))
+        text = ScreenAnalyzer.get_text_in_region(x, y, w, h)
+        print(f"Текст в зоне: \n{text}")
+
     if TEST == 1:   #тест сканирования списка чатов и получения их имён
         logger.info("Тестирование ViberWindow...")
         viber = ViberWindow()
@@ -692,4 +723,11 @@ if __name__ == "__main__":
         cchat_name = viber.get_opened_chat_name()   
         print(f"Имя открытого чата: {cchat_name}")
         viber.scroll_messages_to_bottom()
-    
+
+    if TEST == 3:   #тест чтения сообщений открытого чата
+        viber = ViberWindow()
+        viber.activate()
+        messages = viber.get_messages(since=None)
+        for msg in messages:
+            print(f"{msg.time} {'(мое)' if msg.is_mine else '(чужое)'}: {msg.text}")
+

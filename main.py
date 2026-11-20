@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import ocr_screen
 import viber_window
 import logging
@@ -5,6 +7,8 @@ import logging
 
 viber = viber_window.ViberWindow()
 
+#TODO: в главном цикле сделать проверку на окно обновлений. Если появилось, то нажать "да" и ждать пока обновится
+#В идеале, после обновления сделать расширенный скан окна, с корректировкой констант расположения элементов
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
@@ -28,11 +32,13 @@ if __name__ == "__main__":
                     logger.info(f"Найден чат с новым сообщением: {line.chat_name}")
                     logger.info(f"Открыт чат: {cchat_name}")
                     viber.scroll_messages_to_bottom()
-                    new_messages = viber.get_new_messages()
+                    #TODO: тут будет сначала получение даты-времени последнего сообщения из БД, а потом получение сообщений с момента последнего сообщения
+                    new_messages = viber.get_messages(datetime.datetime.now() - datetime.timedelta(minutes=3600))    
+                        
                     for message in new_messages:
                         logger.info(f"Новое сообщение: {message}")
                         # Отправляем сообщение на сервер (TODO: логика отправки на сервер не реализована)
-
+                        quit() #пока только одна итерация
 
 
 
