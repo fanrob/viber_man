@@ -64,7 +64,10 @@ class ScreenAnalyzer:
                 "height": max(1, height),
             }
             shot = sct.grab(region)
-            return Image.frombytes("RGB", shot.size, shot.rgb)
+            img = Image.frombytes("RGB", shot.size, shot.rgb)
+            if DEBUG_SAVE_REGION:
+                img.save(f"captregion_{int(time.time() * 1000)}.png")    
+            return img
 
     @staticmethod
     def get_text_in_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
@@ -75,7 +78,7 @@ class ScreenAnalyzer:
         image = ScreenAnalyzer.capture_region(x, y, width, height)
         text = pytesseract.image_to_string(image, lang=lang)
         if DEBUG_SAVE_REGION:
-            image.save(f"region_{int(time.time() * 1000)}.png")
+            image.save(f"gettext____{int(time.time() * 1000)}.png")
         return text.strip()
 
     @staticmethod
@@ -92,6 +95,8 @@ class ScreenAnalyzer:
         Если as_2d=True, возвращается двумерный массив по строкам.
         """
         image = ScreenAnalyzer.capture_region(x, y, width, height)
+        if DEBUG_SAVE_REGION:
+            image.save(f"getpixls____{int(time.time() * 1000)}.png")
         pixels: List[Tuple[int, int, int]] = []
 
         for row in range(height):

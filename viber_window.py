@@ -38,7 +38,10 @@ from viber_config import CHAT_LIST_HOLIDAY_FIELD, CORRECTION_X, CORRECTION_Y, ME
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(created)f [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 class ViberWindowError(RuntimeError):
@@ -358,8 +361,9 @@ class ViberWindow:
         prev_signature = None
 
         for page in range(cfg.MESSAGES_MAX_PAGES):
+            logger.info("страница")
             segments, signature = self._scan_message_segments()
-
+            
             if signature == prev_signature:
                 logger.info("Страница %d не изменилась — дальше лента не прокручивается", page)
                 break
@@ -371,6 +375,7 @@ class ViberWindow:
 
             reached_old = False
             for seg in segments:  # снизу вверх: сначала новые сообщения
+                
                 msg_time = self._read_message_time(seg)
                 # Время не распознано -> считаем, что сообщение ещё в нужном
                 # интервале (см. план). Распознано и не новее since -> хватит.
@@ -526,9 +531,177 @@ class ViberWindow:
 
         return datetime(day.year, day.month, day.day, hour, minute)
 
-    def _find_button_copy():
-        chat_image = ScreenAnalyzer()
-    
+    def _find_button_copy(self, click_x: int, click_y: int,
+                          is_mine: bool) -> Tuple[int, int, int, int] | None:
+        """Найти пункт «Скопировать сообщение» в уже открытом контекстном меню.
+
+        Меню уже показано правым кликом — здесь только поиск его координат.
+
+        Алгоритм:
+            1) получаем картинку всей части окна с диалогом;
+            2) ищем вдоль оси Y (X правее/левее клика на 10px), когда цвет
+               пикселей (может быть любым) сменится на цвет фона меню — так
+               найдём верхнюю границу меню; дальше ищем вдоль оси Y, когда фон
+               меню обратно сменится на другой фон чата — так найдём нижнюю
+               границу; нижняя граница может совпасть с границей окна,
+               предусмотреть (отрезок обрывается на краю снимка);
+            3) затем вдоль оси X ищем начало и конец меню по фону
+               (Y на 10px ниже точки клика) — получаем X,Y начала и конца;
+            4) в полученных координатах распознаём текст, убираем пустые
+               строки и знаки препинания — получаем точное меню на экране;
+            5) ищем текст «Копировать сообщение» (как подстроку), узнаём
+               номер строки. Если подстрока не найдена — проверяем строки
+               «Копировать ссылку», «Сохранить как», «Копировать фото»;
+               если не найдена ни одна — описываем в логах все строки и берём
+               пункт №2 (для не-моих сообщений) или №3 (для моих);
+            6) умножаем номер строки на высоту строки (константа) и получаем
+               Y нужной строки.
+
+        Меню может выскочить в любом месте по оси Y (но всегда внутри окна),
+        слева или справа от точки клика: слева — для моих пузырей, справа —
+        для чужих. Стороны и зонды пробуются по очереди, сначала ожидаемая.
+        Пункт «Копировать сообщение» может отсутствовать (например, если в
+        сообщении картинка или файл) — поэтому возможны фолбэки.
+
+        Args:
+            click_x, click_y: экранные координаты правого клика по сообщению.
+            is_mine: клик пришёлся на моё сообщение.
+
+        Returns:
+            (Xmin, Ymax, width, height): Xmin и width — горизонтальные границы
+            меню, Ymax — низ искомой строки, height — высота одного пункта.
+            Клик по центру пункта: (Xmin + width // 2, Ymax - height // 2).
+            None, если меню не найдено.
+        """
+        left, top, win_w, win_h = viber._absolute_zone(cfg.FULL_MESSAGES_LIST_ZONE)
+        image = ScreenAnalyzer.capture_region(left, top, win_w, win_h)
+        px = image.load()
+        cy = click_y - top  # координата клика внутри снимка
+        item_h = cfg.MESSAGE_MENU_ITEM_HEIGHT
+
+        def is_menu(pixel: Tuple[int, int, int]) -> bool:
+            return ScreenAnalyzer.color_matches(pixel, cfg.MESSAGE_MENU_BG,
+                                               cfg.MESSAGE_MENU_BG_TOLERANCE) \
+                or ScreenAnalyzer.color_matches(pixel, cfg.MESSAGE_MENU_HIGHL_BG,
+                                                cfg.MESSAGE_MENU_BG_TOLERANCE)
+            
+
+        def column_runs(col: int) -> List[Tuple[int, int]]:
+            """Отрезки фона меню в столбце; низ может упираться в край окна."""
+            runs: List[Tuple[int, int]] = []
+            start = None
+            for y in range(win_h):
+                if is_menu(px[col, y]):
+                    if start is None:
+                        start = y
+                elif start is not None:
+                    runs.append((start, y))
+                    start = None
+            if start is not None:
+                runs.append((start, win_h))  # нижняя граница = граница окна
+            return runs
+
+        def row_bounds(col: int, row: int) -> Tuple[int, int] | None:
+            """Границы меню по фону в строке row: (лево, право) не включая право."""
+            if not 0 <= row < win_h or not is_menu(px[col, row]):
+                return None
+            x0 = col
+            while x0 > 0 and is_menu(px[x0 - 1, row]):
+                x0 -= 1
+            x1 = col + 1
+            while x1 < win_w and is_menu(px[x1, row]):
+                x1 += 1
+            # всплывающее меню — небольшой блок; шире половины окна — это не меню
+            if not item_h <= x1 - x0 <= win_w // 2:
+                return None
+            return x0, x1
+
+        def find_rects(dx: int) -> List[Tuple[int, int, int, int]]:
+            """Прямоугольники меню на зонде X = клик + dx (ближние к клику первые)."""
+            col = click_x + dx - left
+            if not 0 <= col < win_w:
+                return []
+            min_h = item_h * cfg.MESSAGE_MENU_MIN_ITEMS
+            max_h = item_h * cfg.MESSAGE_MENU_MAX_ITEMS
+            found = []
+            for y0, y1 in column_runs(col):
+                if not min_h <= y1 - y0 <= max_h:
+                    continue
+                # строка для границ по X: Y клика + 10, иначе середина меню
+                row = cy + cfg.MESSAGE_MENU_PROBE_OFFSET
+                if not y0 <= row < y1:
+                    row = (y0 + y1) // 2
+                bounds = row_bounds(col, row) or row_bounds(col, y0 + 3)
+                if bounds is None:
+                    continue
+                x0, x1 = bounds
+                # меню открывается от точки клика — клик у самого края меню,
+                # тогда как клик в центр пузыря далеко от его краёв
+                edge = min(abs(cy - y0), abs(cy - y1))
+                found.append((edge, left + x0, top + y0, left + x1, top + y1))
+            found.sort()
+            return [(x0, y0, x1, y1) for _, x0, y0, x1, y1 in found]
+
+        offset = cfg.MESSAGE_MENU_PROBE_OFFSET
+        if is_mine:
+            probes = (-offset, -offset * 3, offset, offset * 3)
+        else:
+            probes = (offset, offset * 3, -offset, -offset * 3)
+
+        for dx in probes:
+            for x0, y0, x1, y1 in find_rects(dx):
+                text = ScreenAnalyzer.get_text_in_region(x0, y0, x1 - x0, y1 - y0)
+                rows = self._menu_rows(text)
+                target = self._menu_copy_row(rows)
+                if target is None:
+                    # ни пунктов копирования, ни похожего на меню текста —
+                    # похоже на текст сообщения, а не на меню
+                    if not rows or not all(len(r) <= cfg.MESSAGE_MENU_MAX_ITEM_TEXT_LEN
+                                           for r in rows):
+                        logger.debug("Прямоугольник (%d,%d)-(%d,%d) отклонён, строки: %s",
+                                     x0, y0, x1, y1, rows)
+                        continue
+                    row_no = (cfg.MESSAGE_COPY_FALLBACK_ROW_MY if is_mine
+                              else cfg.MESSAGE_COPY_FALLBACK_ROW_ANOTH)
+                    logger.warning("Пункт копирования не найден, строки меню: %s — берём №%d",
+                                   rows, row_no)
+                    target = None #min(max(row_no - 1, 0), len(rows) - 1)
+                    return None
+                
+                # Y нужной строки = верх меню + номер строки * высота пункта
+                row_bottom = min(y0 + (target + 1) * item_h, y1)
+                row_bottom = max(row_bottom, y0 + 1)
+                logger.debug("Меню (%d,%d)-(%d,%d), строк %d, пункт %d",
+                             x0, y0, x1, y1, len(rows), target)
+                return x0, row_bottom, x1 - x0, item_h
+
+        logger.warning("Контекстное меню не найдено рядом с точкой (%d, %d)",
+                       click_x, click_y)
+        return None
+
+    @staticmethod
+    def _menu_rows(text: str) -> List[str]:
+        """Строки меню из OCR-текста: без пустых строк и знаков препинания."""
+        rows: List[str] = []
+        for line in text.splitlines():
+            cleaned = re.sub(r"[^\w\s-]", "", line)  # убрать знаки препинания
+            cleaned = " ".join(cleaned.split())      # схлопнуть пробелы
+            if cleaned:
+                rows.append(cleaned)
+        return rows
+
+    @staticmethod
+    def _menu_copy_row(rows: List[str]) -> int | None:
+        """Номер строки меню с пунктом копирования (None, если такого нет)."""
+        lowered = [row.lower() for row in rows]
+        for i, row in enumerate(lowered):
+            if cfg.MESSAGE_COPY_SEARCH_TEXT.lower() in row:
+                return i
+        for fallback in cfg.MESSAGE_COPY_FALLBACK_TEXTS:
+            for i, row in enumerate(lowered):
+                if fallback.lower() in row:
+                    return i
+        return None
 
     def _copy_message_text(self, seg: _MessageSegment) -> str:
         """Скопировать текст сообщения: правый клик -> «Копировать» -> буфер.
@@ -546,28 +719,20 @@ class ViberWindow:
         ScreenAnalyzer.move_mouse_to(x, y, duration=0.2)
         ScreenAnalyzer.click_in_place(x, y, button="right")
         
-        # теперь сложное: меню может выскочить в любом месте по оси Y, слева или справа от точки клика, в зависимости 
-        # от того, по моим пузырям или чужим.
-        # Также кнопка копировать может быть не на том месте, где мы ожидаем (например, если в сообщении есть картинка или файл)
-        # Поэтому мы кликаем правой кнопкой по сообщению, получаем картинку всей части окна с диалогом,
-        # ищем вдоль оси Y (X правее/левее на 10px чем клик) когда цвет пикселей сменится на цвет фона меню. 
-        # Так найдем верхнюю границу меню. Далее ищем вдоль оси Y, когда цвет фона меню обратно сменится на другой цвет 
-        # фона чата. Так найдем нижнюю границу меню. Нижняя границе может совпасть с границей окна, предусмотреть
-        # затем также вдоль оси X ищем начало и конец меню по фону (Y на 10px ниже точки клика)
-        # в полученых координатах распознаем текст. Убираем пустые строки. Получаем точное меню на экране
-        # Ищем текст Скопировать сообщение, узнаем номер строки. Множим номер строки на высоту строки (константа будет дана)
-        # и получаем Y нужно строки, делаем клик по середине по Y и на 20 px правее (или левее, если меню для моего сообщения)
-
-        menu_x, menu_y = self._find_button_copy()
-        
-
-
-
-
-
-        ScreenAnalyzer.click_in_place(menu_x, menu_y)
         time.sleep(cfg.CLICK_SETTLE_DELAY)
+
+        found = self._find_button_copy(x, y, seg.is_mine)
+        if found is None:
+            ScreenAnalyzer.press_key("esc")  # закрыть меню
+            logger.warning("Не удалось скопировать сообщение в точке (%d, %d): пункт меню не найден",
+                           x, y)
+            return ""
+
+        menu_xmin, menu_ymax, menu_width, item_height = found
+        ScreenAnalyzer.click_in_place(menu_xmin + menu_width // 2,
+                                      menu_ymax - item_height // 2)
         ScreenAnalyzer.press_key("esc")  # закрыть меню, если пункт не совпал
+        time.sleep(cfg.PAUSE_AFTER_CLOSE_MENU)
 
         text = ScreenAnalyzer.get_clipboard_text().strip()
         if not text:
@@ -674,7 +839,7 @@ class ViberWindow:
 if __name__ == "__main__":
     pyautogui.FAILSAFE = False
     
-    TEST = 0.1
+    TEST = 3
 
     if TEST == 0:   #тест координат скрина экрана
         viber = ViberWindow()
