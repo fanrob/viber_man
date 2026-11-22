@@ -178,6 +178,9 @@ class ScreenAnalyzer:
     @staticmethod
     def click_in_place(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.0) -> None:
         """Кликнуть левой/правой кнопкой мыши в указанное место."""
+        ScreenAnalyzer.move_mouse_to(x,y,duration=0.2)
+        print(f"{int(time.time()*1000)}: click {x}, {y}, {button}")
+        time.sleep(1)
         pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
         return
 

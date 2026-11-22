@@ -105,9 +105,9 @@ MESSAGES_MAX_PAGES = 15     # максимум страниц за один вы
 DEFAULT_COLOR_TOLERANCE = 0  # допуск отклонения цвета (0..255)
 DEFAULT_VIOL_COLOR: RGB = (115, 96, 242)
 
-BACKGROUND_CHAT: RGB = (250,248,249)
-BACKGROUND_ANOTH_MESS: RGB = (255,255,255)  
-BACKGROUND_MY_MESS: RGB = (0,116,227) #(0, 97, 191)
+BACKGROUND_CHAT: RGB = (250,233,225)    #фон чата
+BACKGROUND_ANOTH_MESS: RGB = (255,255,255)      # фон сообщений собеседника
+BACKGROUND_MY_MESS: RGB = (0,116,227) #(0, 97, 191) фон моих сообщений
  
 
 
@@ -133,16 +133,21 @@ SCROLL_AMOUNT = 5000  # "щелчки" колёсика за один вызов
 
 MESSAGE_MENU_BG: RGB = (255, 255, 255)
 MESSAGE_MENU_HIGHL_BG: RGB = (246, 246, 246)
-MESSAGE_MENU_BG_TOLERANCE = 0      # цвет фона очень похож, потому только 0
+MESSAGE_MENU_BG_TOLERANCE = 0       
 MESSAGE_MENU_ITEM_HEIGHT = 36      # высота одного пункта меню, px
-MESSAGE_MENU_PROBE_OFFSET = 10     # зонда: X клика ±10 (и ±30 в запас), Y клика +10
+MESSAGE_MENU_AN_OFFSET = 20        # насколько левее или правее искать меню для собеседника (брать вертикаль, сканить цвет пикселей)
+MESSAGE_MENU_MY_OFFSET = 5         # насколько левее или правее искать меню для моих сообщений
 MESSAGE_MENU_MIN_ITEMS = 1         # меню ниже одного пункта — не меню
 MESSAGE_MENU_MAX_ITEMS = 12        # меню выше — уже не меню
 MESSAGE_MENU_MAX_ITEM_TEXT_LEN = 40  # строка длиннее — это текст сообщения, а не меню
+MESSAGE_OFFSET_MENU_SCAN_X = 10    # на столько ниже точки клика правой кнопкой, чтобы искать левую и правую границу меню
+MESSAGES_MENU_ICONS_ZONE_W = 43    # левая зона с иконками в меню правой кнопки, её нужно убирать
+MENU_CORRECT_FOR_DOUBLE_SCAN_X = 18 # на столько ниже сканируем ось X при поиске ширины меню (если в первый раз попали на буквы)
+
 
 # Пункты меню: подстроки в распознанном тексте (без учёта регистра)
 MESSAGE_COPY_SEARCH_TEXT = "Скопировать сообщение"
-MESSAGE_COPY_FALLBACK_TEXTS = ("Копировать ссылку", "Сохранить как", "Копировать фото")
+MESSAGE_COPY_FALLBACK_TEXTS = ("Копировать ссылку", "Сохранить как", "Копировать фото", "Загрузить")
 
 # Пункт по умолчанию, если ни один не найден (нумерация с 1):
 # для чужого сообщения — 2-й, для моего — 3-й.
