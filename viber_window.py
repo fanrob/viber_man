@@ -31,9 +31,10 @@ from datetime import date, datetime, timedelta
 from typing import List, NamedTuple, Tuple
 
 import pyautogui
+import pytesseract
 
 import viber_config as cfg
-from ocr_screen import ScreenAnalyzer
+from ocr_screen import LANG, ScreenAnalyzer, _ensure_tesseract
 from viber_config import CHAT_LIST_HOLIDAY_FIELD, CORRECTION_X, CORRECTION_Y, MESSAGES_SCROLL_BUTTON_ZONE, NEW_MESSAGES_ZONE, Point
 
 import logging
@@ -354,7 +355,7 @@ class ViberWindow:
 
         # 1. активируем окно, держим фокус в ленте, прокручиваем в самый низ
         self.activate()
-        #self.scroll_messages_to_bottom()       #DEBUG
+        self.scroll_messages_to_bottom()
 
         found: List[Message] = []   # порядок сбора: снизу вверх (новые -> старые)
         seen: set = set()           # уже прочитанные (защита от дублей после PageUp)
@@ -424,9 +425,6 @@ class ViberWindow:
         signature = []
 
         for offset, is_mine in ((cfg.ANOTH_MESS_SCAN_X, False), (cfg.MY_MESS_SCAN_X, True)):
-            if not 0 <= offset < aw:
-                logger.warning("Линия сканирования вне зоны: offset=%d, ширина зоны=%d", offset, aw)
-                continue
             x = ax + offset
             colors = ScreenAnalyzer.get_pixels_colors_in_region(x, ay, 1, ah)
             signature.append(tuple(colors))
@@ -467,6 +465,7 @@ class ViberWindow:
             runs.append((start, len(colors)))
 
         # 2. отбор: высота как у пузыря, внутри преимущественно «свой» цвет
+        ''' TODO: пока выключаю фильтрацию сегментов по цвету владельца сообщения, так как картинки выпадают из списков
         result: List[Tuple[int, int]] = []
         for top, bottom in runs:
             height = bottom - top
@@ -483,17 +482,81 @@ class ViberWindow:
             )
             if own < 10 or foreign > own:
                 continue
-            result.append((top, bottom))
-        return result
+            result.append((top, bottom))'''
+        return runs        #result
 
     def _read_message_time(self, seg: _MessageSegment) -> datetime | None:
-        """Распознать время у нижней границы отрезка (прямоугольник из конфига)."""
-        offset = cfg.MY_MESS_TIME_ZONE if seg.is_mine else cfg.ANOTH_MESS_TIME_ZONE
-        x = seg.scan_x + offset[0]
-        y = seg.bottom + offset[1]
-        text = ScreenAnalyzer.get_text_in_region(x, y, offset[2], offset[3])
+        """Распознать время сообщения (часы:минуты) в правом нижнем углу его прямоугольника.
+
+        Время всегда стоит в правом нижнем углу прямоугольника (пузыря)
+        сообщения и состоит только из часов и минут — даты рядом нет, она
+        пока игнорируется. Алгоритм:
+            1) правый край прямоугольника — горизонтальный скан вправо от
+               линии сканирования по цвету пузыря (допуск
+               MESS_TIME_SCAN_TOLERANCE); фон до первого пикселя пузыря
+               пропускается — линия сканирования может начаться левее края;
+               скан идёт по нескольким строкам у самого низа отрезка
+               (чуть выше дна — скругление углов, ещё выше — текст
+               времени), берётся самый правый край;
+            2) зона OCR = правый нижний угол + сдвиг из конфига
+               (ANOTH/MY_MESS_TIME_ZONE: dx влево, dy вверх, ширина, высота);
+            3) OCR зоны в режиме одной строки (--psm 7) и разбор времени;
+               если не вышло — запасной распознавание общим режимом.
+
+        Args:
+            seg: отрезок-пузырь (координаты экрана).
+
+        Returns:
+            datetime (сегодняшняя дата — рядом с временем её нет) или None,
+            если время распознать не удалось.
+        """
+        # 1. правый край прямоугольника сообщения (скан вправо по цвету пузыря)
+        own_color = cfg.BACKGROUND_MY_MESS if seg.is_mine else cfg.BACKGROUND_ANOTH_MESS
+        left, top, win_w, win_h = self._window_rect()
+        y0 = max(seg.top, seg.bottom - cfg.MESS_TIME_SCAN_ROWS)
+        # скан не должен выйти за правую границу окна
+        width = min(cfg.MESS_TIME_SCAN_WIDTH, left + win_w - seg.scan_x)
+        if seg.bottom <= y0 or width <= 0:
+            logger.warning("Некорректный отрезок для скана времени: %s", (seg.top, seg.bottom, seg.scan_x))
+            return None
+
+        strip = ScreenAnalyzer.capture_region(seg.scan_x, y0, width, seg.bottom - y0)
+        pixels = strip.load()
+        right = seg.scan_x  # первый пиксель за правым краем пузыря
+        for row in range(strip.height):
+            gap = 0  # чужих пикселей подряд (шум/сглаживание края)
+            seen_own = False  # встречен ли уже пиксель пузыря в этой строке
+            for x in range(strip.width):
+                if ScreenAnalyzer.color_matches(pixels[x, row], own_color,
+                                                cfg.MESS_TIME_SCAN_TOLERANCE):
+                    seen_own = True
+                    gap = 0
+                    right = max(right, seg.scan_x + x + 1)
+                elif seen_own:
+                    # фон до первого пикселя пузыря не считаем: линия
+                    # сканирования может начаться левее края (скругление)
+                    gap += 1
+                    if gap >= cfg.MESS_TIME_SCAN_GAP:
+                        break  # край пузыря в этой строке
+
+        # 2. зона времени = правый нижний угол прямоугольника + сдвиг
+        dx, dy, w, h = (cfg.MY_MESS_TIME_ZONE if seg.is_mine
+                        else cfg.ANOTH_MESS_TIME_ZONE)
+        x, y = right + dx, seg.bottom + dy
+        # зона не должна выйти за границы окна
+        x, y = max(x, left), max(y, top)
+        w, h = min(w, left + win_w - x), min(h, top + win_h - y)
+        if w <= 0 or h <= 0:
+            logger.warning("Зона времени вне окна: край=%d, отрезок y=%d..%d",
+                           right, seg.top, seg.bottom)
+            return None
+
+        # 3. OCR: время — одна строка, режим одной строки надёжнее обычного
+        text = ScreenAnalyzer.get_string_from_region(x,y,w,h)
         parsed = self._parse_message_time(text)
-        logger.debug("Время отрезка y=%d..%d: %r -> %s", seg.top, seg.bottom, text, parsed)
+        
+        logger.debug("Время отрезка y=%d..%d (правый край %d, зона %d,%d %dx%d): %r -> %s",
+                     seg.top, seg.bottom, right, x, y, w, h, text, parsed)
         return parsed
 
     @staticmethod

@@ -82,6 +82,15 @@ class ScreenAnalyzer:
         return text.strip()
 
     @staticmethod
+    def get_string_from_region(x: int, y: int, width: int, height: int, lang: str = LANG) -> str:
+        _ensure_tesseract()
+        image = ScreenAnalyzer.capture_region(x, y, width, height)
+        text = pytesseract.image_to_string(
+            image, lang=lang, config="--psm 7"
+        ).strip()
+        return text
+
+    @staticmethod
     def get_pixels_colors_in_region(
         x: int,
         y: int,
