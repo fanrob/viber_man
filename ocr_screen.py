@@ -227,8 +227,11 @@ class ScreenAnalyzer:
 
     @staticmethod
     def press_key(key: str) -> None:
-        """Нажать клавишу клавиатуры (например, 'enter')."""
-        pyautogui.press(key)
+        """Нажать клавишу (например, 'enter') или комбинацию (например, 'ctrl+c')."""
+        if "+" in key:
+            pyautogui.hotkey(*key.split("+"))
+        else:
+            pyautogui.press(key)
 
     @staticmethod
     def scroll_at(x: int, y: int, direction: int, amount: int = 5) -> None:

@@ -28,6 +28,7 @@
 import re
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import List, NamedTuple, Tuple
 
 import pyautogui
@@ -633,12 +634,14 @@ class ViberWindow:
             is_mine: клик пришёлся на моё сообщение.
 
         Returns:
-            (Xmin, Ymax, width, height): Xmin и width — горизонтальные границы
-            меню, Ymax — низ искомой строки, height — высота одного пункта.
+            (Xmin, Ymax, width, height, текст пункта): Xmin и width —
+            горизонтальные границы меню, Ymax — низ искомой строки, height —
+            высота одного пункта, текст пункта — распознанный текст выбранной
+            строки (нужен, чтобы отличить «Сохранить как» от «Копировать»).
             Клик по центру пункта: (Xmin + width // 2, Ymax - height // 2).
             None, если меню не найдено.
         """
-        left, top, win_w, win_h = viber._absolute_zone(cfg.FULL_MESSAGES_LIST_ZONE)
+        left, top, win_w, win_h = self._absolute_zone(cfg.FULL_MESSAGES_LIST_ZONE)
         
         image = ScreenAnalyzer.capture_region(left, top, win_w, win_h)
         px = image.load()
@@ -742,7 +745,7 @@ class ViberWindow:
                 row_bottom = max(row_bottom, y0 + 1)
                 logger.debug("Меню (%d,%d)-(%d,%d), строк %d, пункт %d",
                                 x0, y0, x1, y1, len(rows), target)
-                return x0, row_bottom, x1 - x0, item_h
+                return x0, row_bottom, x1 - x0, item_h, rows[target]
 
         # ни пунктов копирования, ни похожего на меню текста —
         # похоже на текст сообщения, а не на меню
@@ -789,8 +792,13 @@ class ViberWindow:
     def _copy_message_text(self, seg: _MessageSegment) -> str:
         """Скопировать текст сообщения: правый клик -> «Копировать» -> буфер.
 
+        Для файловых сообщений (в меню есть «Сохранить как») текста нет —
+        вместо него сохраняется файл через окно Windows (см.
+        _save_file_via_dialog) и возвращается путь к нему.
+
         Returns:
-            Текст сообщения или "", если скопировать не удалось.
+            Текст сообщения, путь к сохранённому файлу или "", если скопировать
+            не удалось.
         """
         offset = cfg.MY_MESS_COPY_OFFSET if seg.is_mine else cfg.ANOTH_MESS_COPY_OFFSET
         x = seg.scan_x + offset[0]
@@ -811,9 +819,14 @@ class ViberWindow:
                            x, y)
             return ""
 
-        menu_xmin, menu_ymax, menu_width, item_height = found
+        menu_xmin, menu_ymax, menu_width, item_height, item_text = found
         ScreenAnalyzer.click_in_place(menu_xmin + menu_width // 2,
                                       menu_ymax - item_height // 2)
+
+        # файловое сообщение: «Сохранить как» -> окно сохранения Windows
+        if cfg.MESSAGE_SAVE_AS_TEXT.lower() in item_text.lower():
+            return self._save_file_via_dialog()
+
         ScreenAnalyzer.press_key("esc")  # закрыть меню, если пункт не совпал
         time.sleep(cfg.PAUSE_AFTER_CLOSE_MENU)
 
@@ -821,6 +834,93 @@ class ViberWindow:
         if not text:
             logger.warning("Не удалось скопировать сообщение в точке (%d, %d)", x, y)
         return text
+
+    def _save_file_via_dialog(self) -> str:
+        """Сохранить файл через окно Windows, вызванное пунктом «Сохранить как».
+
+        Алгоритм:
+            1) ждём появления окна сохранения (константа SAVE_DIALOG_WAIT);
+            2) копируем из выделенного в нём поля имени файла его содержимое
+               (Ctrl+C) — это и есть имя сохраняемого файла;
+            3) программно нажимаем Enter (сохранить);
+            4) если файл с таким именем уже есть — подтверждаем замену
+               (см. _confirm_save_replace: Влево, затем Enter);
+            5) возвращаем полный путь к файлу (см. _resolve_saved_file).
+
+        Returns:
+            Путь к сохранённому файлу или "", если определить его не удалось.
+        """
+        time.sleep(cfg.SAVE_DIALOG_WAIT)          # ждём, пока окно появится
+        ScreenAnalyzer.press_key("ctrl+c")        # имя файла (поле выделено)
+        time.sleep(cfg.SEND_KEY_DELAY)
+        file_name = ScreenAnalyzer.get_clipboard_text().strip()  # "" — не скопировалось
+
+        ScreenAnalyzer.press_key(cfg.SUBMIT_KEY)  # Enter = сохранить
+        self._confirm_save_replace()              # вдруг файл уже существует
+        return self._resolve_saved_file(file_name)
+
+    def _confirm_save_replace(self) -> None:
+        """Подтвердить замену, если файл с таким именем уже существует.
+
+        В течение SAVE_CONFIRM_WAIT секунд проверяем, не появилось ли окно
+        подтверждения (по заголовку из SAVE_CONFIRM_TITLES); если появилось —
+        нажимаем Влево (переключение на «Да») и Enter.
+        """
+        deadline = time.time() + cfg.SAVE_CONFIRM_WAIT
+        while True:
+            for title in cfg.SAVE_CONFIRM_TITLES:
+                if pyautogui.getWindowsWithTitle(title):
+                    logger.info("Файл с таким именем уже есть — подтверждаем замену (%r)", title)
+                    time.sleep(cfg.CLICK_SETTLE_DELAY)
+                    ScreenAnalyzer.press_key("left")       # Влево -> «Да»
+                    time.sleep(cfg.SEND_KEY_DELAY)
+                    ScreenAnalyzer.press_key(cfg.SUBMIT_KEY)  # Enter
+                    time.sleep(cfg.CLICK_SETTLE_DELAY)
+                    return
+            if time.time() >= deadline:
+                return  # окна подтверждения не было — файл уникален
+            time.sleep(0.2)
+
+    def _resolve_saved_file(self, file_name: str) -> str:
+        """Полный путь файла, который только что сохранили в SAVE_FOLDER.
+
+        Имя из окна сохранения может прийти с расширением или без, поэтому
+        расширение вычисляется по самому файлу: в папке ищем файл с таким
+        именем (имя целиком или имя без расширения); если совпадений несколько
+        — берём самый свежий по дате изменения (только что сохранённый).
+        Если имя узнать не удалось — возвращаем самый свежий файл папки.
+
+        Returns:
+            Путь к файлу (str) или "", если файл найти не удалось.
+        """
+        folder = cfg.SAVE_FOLDER
+        if not folder.is_dir():
+            logger.warning("Папка сохранения не найдена: %s", folder)
+            return ""
+
+        wanted = file_name.lower()
+        matches: List[Path] = []
+        newest: Path | None = None
+        for path in folder.iterdir():
+            if not path.is_file():
+                continue
+            if newest is None or path.stat().st_mtime > newest.stat().st_mtime:
+                newest = path
+            if wanted and (path.name.lower() == wanted or path.stem.lower() == wanted):
+                matches.append(path)
+
+        if matches:
+            result = str(max(matches, key=lambda p: p.stat().st_mtime))
+        elif not file_name and newest is not None:
+            result = str(newest)  # имя не скопировалось — берём последний файл
+        elif file_name:
+            result = str(folder / file_name)  # файла ещё нет на диске — путь как есть
+        else:
+            logger.warning("Не удалось определить путь сохранённого файла")
+            return ""
+
+        logger.info("Файл сохранён: %s", result)
+        return result
 
     # ------------------------------------------------------------------
     # 6. Отправка сообщения
