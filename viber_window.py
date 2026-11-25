@@ -790,15 +790,18 @@ class ViberWindow:
         return None
 
     def _copy_message_text(self, seg: _MessageSegment) -> str:
-        """Скопировать текст сообщения: правый клик -> «Копировать» -> буфер.
+        """Скопировать сообщение: правый клик -> пункт меню -> результат.
 
-        Для файловых сообщений (в меню есть «Сохранить как») текста нет —
-        вместо него сохраняется файл через окно Windows (см.
-        _save_file_via_dialog) и возвращается путь к нему.
+        Обрабатываются все пункты контекстного меню:
+            «Копировать сообщение» / «Копировать ссылку» — клик кладёт
+                результат (текст или ссылку) в буфер обмена, он же читается;
+            «Сохранить как» — окно сохранения Windows, возвращается путь
+                к сохранённому файлу (см. _save_file_via_dialog);
+            «Загрузить» — файл скачивается без окна, возвращается путь
+                к новому файлу в папке загрузок (см. _find_downloaded_file).
 
         Returns:
-            Текст сообщения, путь к сохранённому файлу или "", если скопировать
-            не удалось.
+            Текст сообщения, ссылка, путь к файлу или "", если не удалось.
         """
         offset = cfg.MY_MESS_COPY_OFFSET if seg.is_mine else cfg.ANOTH_MESS_COPY_OFFSET
         x = seg.scan_x + offset[0]
@@ -820,6 +823,7 @@ class ViberWindow:
             return ""
 
         menu_xmin, menu_ymax, menu_width, item_height, item_text = found
+        clicked_at = time.time()  # момент нажатия пункта (нужен для «Загрузить»)
         ScreenAnalyzer.click_in_place(menu_xmin + menu_width // 2,
                                       menu_ymax - item_height // 2)
 
@@ -827,12 +831,18 @@ class ViberWindow:
         if cfg.MESSAGE_SAVE_AS_TEXT.lower() in item_text.lower():
             return self._save_file_via_dialog()
 
+        # «Загрузить» -> файл появится в папке загрузок без окна сохранения
+        if cfg.MESSAGE_DOWNLOAD_TEXT.lower() in item_text.lower():
+            return self._find_downloaded_file(clicked_at)
+
+        # «Копировать сообщение» и «Копировать ссылку»: пункт уже нажат,
+        # результат (текст или ссылка) уже лежит в буфере обмена
         ScreenAnalyzer.press_key("esc")  # закрыть меню, если пункт не совпал
         time.sleep(cfg.PAUSE_AFTER_CLOSE_MENU)
 
         text = ScreenAnalyzer.get_clipboard_text().strip()
         if not text:
-            logger.warning("Не удалось скопировать сообщение в точке (%d, %d)", x, y)
+            logger.warning("Не удалось скопировать %r в точке (%d, %d)", item_text, x, y)
         return text
 
     def _save_file_via_dialog(self) -> str:
@@ -920,6 +930,34 @@ class ViberWindow:
             return ""
 
         logger.info("Файл сохранён: %s", result)
+        return result
+
+    def _find_downloaded_file(self, clicked_at: float) -> str:
+        """Найти файл, скачанный пунктом «Загрузить», в папке SAVE_FOLDER.
+
+        Клик по пункту уже сделан (`clicked_at` — момент клика): ждём
+        DOWNLOAD_WAIT секунд, закрываем остатки меню (Esc) и ищем в папке
+        файлы, изменённые не раньше клика (допуск DOWNLOAD_MTIME_TOLERANCE
+        на округление времени в файловой системе) — из них берём самый свежий.
+
+        Returns:
+            Путь к новому файлу или "", если файла нет.
+        """
+        time.sleep(cfg.DOWNLOAD_WAIT)
+        ScreenAnalyzer.press_key("esc")  # закрыть меню, если пункт не совпал
+
+        folder = cfg.SAVE_FOLDER
+        if not folder.is_dir():
+            logger.warning("Папка загрузок не найдена: %s", folder)
+            return ""
+        fresh = [p for p in folder.iterdir()
+                 if p.is_file()
+                 and p.stat().st_mtime >= clicked_at - cfg.DOWNLOAD_MTIME_TOLERANCE]
+        if not fresh:
+            logger.warning("После «Загрузить» не появился новый файл в %s", folder)
+            return ""
+        result = str(max(fresh, key=lambda p: p.stat().st_mtime))
+        logger.info("Файл загружен: %s", result)
         return result
 
     # ------------------------------------------------------------------
