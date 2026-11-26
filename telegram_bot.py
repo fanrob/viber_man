@@ -27,12 +27,12 @@ from ocr_screen import ScreenAnalyzer
 from viber_window import ChatEntry, ViberWindow
 import viber_config as cfg
 
+from tokens import TELEGRAM_TOKEN,TELEGRAM_CHAT_ID
 # ---------------------------------------------------------------------------
 # Настройки
 # ---------------------------------------------------------------------------
 
-TELEGRAM_TOKEN = ""          # токен от @BotFather
-TELEGRAM_CHAT_ID = 0         # id чата, куда слать сообщения (только свой)
+
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 DB_PATH = Path(__file__).with_name("viber_messages.sqlite3")
