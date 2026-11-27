@@ -189,7 +189,6 @@ class ScreenAnalyzer:
         """Кликнуть левой/правой кнопкой мыши в указанное место."""
         ScreenAnalyzer.move_mouse_to(x,y,duration=0.2)
         print(f"{int(time.time()*1000)}: click {x}, {y}, {button}")
-        time.sleep(1)
         pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=interval)
         return
 

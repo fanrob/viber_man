@@ -254,11 +254,12 @@ class ViberWindow:
         Returns:
             Имя открытого чата или "", если получить не удалось.
         """
-        ScreenAnalyzer.move_mouse_to(*self._abs_pnt(cfg.OPENED_CHAT_NAME_POINT), duration=0.4)
-        ScreenAnalyzer.click_in_place(*self._abs_pnt(cfg.OPENED_CHAT_NAME_POINT), button="right")
+        #ScreenAnalyzer.move_mouse_to(*self._abs_pnt(cfg.OPENED_CHAT_NAME_POINT), duration=0.2)
+        ScreenAnalyzer.click_in_place(*self._abs_pnt((cfg.OPENED_CHAT_NAME_POINT[0]-1,
+                                                            cfg.OPENED_CHAT_NAME_POINT[1]-1)), button="right")
         time.sleep(cfg.CLICK_SETTLE_DELAY)
-        ScreenAnalyzer.click_in_place(*self._abs_pnt((cfg.OPENED_CHAT_NAME_POINT[0]+10,
-                                                            cfg.OPENED_CHAT_NAME_POINT[1]+10)))
+        ScreenAnalyzer.click_in_place(*self._abs_pnt((cfg.OPENED_CHAT_NAME_POINT[0]+12,
+                                                            cfg.OPENED_CHAT_NAME_POINT[1]+12)))
         time.sleep(cfg.CLICK_SETTLE_DELAY)
         #получаем текст из буфера обмена
         text = ScreenAnalyzer.get_clipboard_text()
@@ -1060,7 +1061,7 @@ class ViberWindow:
 if __name__ == "__main__":
     pyautogui.FAILSAFE = False
     
-    TEST = 3
+    TEST = 2
 
     if TEST == 0:   #тест координат скрина экрана
         viber = ViberWindow()

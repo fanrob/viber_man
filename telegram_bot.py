@@ -113,7 +113,7 @@ def open_chat(viber: ViberWindow, chat: ChatEntry) -> None:
     x = chat.position[0] + cfg.CHAT_HEADER_COORD[2] // 2
     y = chat.position[1] + cfg.CHAT_HEADER_COORD[3] // 2
     ScreenAnalyzer.click_in_place(*viber._abs_pnt((x, y)))
-    time.sleep(cfg.CHAT_OPEN_DELAY)
+    #time.sleep(cfg.CHAT_OPEN_DELAY)
 
 
 def process_chat(viber: ViberWindow, conn: sqlite3.Connection, chat: ChatEntry) -> None:
@@ -124,6 +124,8 @@ def process_chat(viber: ViberWindow, conn: sqlite3.Connection, chat: ChatEntry) 
     if not name:
         print("Не удалось узнать имя чата — пропускаем")
         return
+    else:
+        print('прочитан чат: '+name)
 
     messages = viber.get_messages(since=None)  # от старых к новым
     if not messages:
@@ -181,3 +183,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
