@@ -21,8 +21,9 @@
        is_message_sent()             — проверить, что сообщение дошло (TODO алгоритма)
     7. click_chat() / click_chat_at() — кликнуть по чату (по имени / по позиции)
 
-Низкоуровневые утилиты (снимки экрана, поиск цвета, скролл, клики, ввод, буфер
-обмена) — в модуле ocr_screen; координаты, цвета и задержки — в viber_config.
+Низкоуровневые утилиты (снимки экрана, поиск цвета, анализ рядов пикселей,
+скролл, клики, ввод, буфер обмена) — в модуле ocr_screen; координаты, цвета и
+задержки — в viber_config.
 """
 
 import re
@@ -202,6 +203,7 @@ class ViberWindow:
         поле с днюхами 40 px, цвет 115, 96, 242
 
         """
+        
         self.close_holiday()  #закрыть поле с днюхами, если оно есть
 
         #сдвинуть мышку вправо, чтобы не мешала сканированию списка чатов
@@ -215,7 +217,7 @@ class ViberWindow:
             # 1. получаем зону с названием чата
             # 2. получаем число новых сообщений в чате (если есть)
 
-            # распознать текст в зоне названия чата (OCR)
+            # распознать текст в зоне названия чата (OCR)   TODO: не учтена кнопка проверить обновления!
             chat_name = ScreenAnalyzer.get_text_in_region(
                 *self._absolute_zone((cfg.CHAT_LIST_ZONE[0]+cfg.CHAT_HEADER_COORD[0], 
                                       cfg.CHAT_LIST_ZONE[1] + cury + cfg.CHAT_HEADER_COORD[1], 
@@ -430,62 +432,45 @@ class ViberWindow:
             x = ax + offset
             colors = ScreenAnalyzer.get_pixels_colors_in_region(x, ay, 1, ah)
             signature.append(tuple(colors))
-            for top, bottom in self._bubble_runs(colors, is_mine):
+
+            # 1. отрезки непрерывных пикселей, отличных от фона чата
+            #    (сам анализ ряда пикселей — в ocr_screen.find_foreign_color_runs)
+            runs = ScreenAnalyzer.find_foreign_color_runs(
+                colors, cfg.BACKGROUND_CHAT, cfg.MESSAGES_SCAN_TOLERANCE
+            )
+
+            # 2. отбор: высота как у пузыря, внутри преимущественно «свой» цвет
+            ''' TODO: пока выключаю фильтрацию сегментов по цвету владельца сообщения, так как картинки выпадают из списков.
+            Перед раскомментированием задать (is_mine уже известен в этом цикле):
+            tolerance = cfg.MESSAGES_SCAN_TOLERANCE
+            own_color = cfg.BACKGROUND_MY_MESS if is_mine else cfg.BACKGROUND_ANOTH_MESS
+            foreign_color = cfg.BACKGROUND_ANOTH_MESS if is_mine else cfg.BACKGROUND_MY_MESS
+            result: List[Tuple[int, int]] = []
+            for top, bottom in runs:
+                height = bottom - top
+                if not cfg.MESSAGES_MIN_SEGMENT_HEIGHT <= height <= cfg.MESSAGES_MAX_SEGMENT_HEIGHT:
+                    continue
+                segment_colors = colors[top:bottom]
+                own = sum(
+                    1 for p in segment_colors
+                    if ScreenAnalyzer.color_matches(p, own_color, tolerance)
+                )
+                foreign = sum(
+                    1 for p in segment_colors
+                    if ScreenAnalyzer.color_matches(p, foreign_color, tolerance)
+                )
+                if own < 10 or foreign > own:
+                    continue
+                result.append((top, bottom))
+            runs = result'''
+
+            for top, bottom in runs:
                 segments.append(
                     _MessageSegment(top=ay + top, bottom=ay + bottom, scan_x=x, is_mine=is_mine)
                 )
 
         segments.sort(key=lambda seg: seg.top, reverse=True)  # снизу вверх
         return segments, tuple(signature)
-
-    @staticmethod
-    def _bubble_runs(colors: List[Tuple[int, int, int]], is_mine: bool) -> List[Tuple[int, int]]:
-        """Найти в вертикальном срезе отрезки-пузыри.
-
-        Отрезок — непрерывный участок, отличный от фона чата, подходящий по
-        высоте и с преобладанием «своего» цвета (свои/чужие пузыри разного
-        цвета, белый текст внутри пузыря не должен сбивать с толку).
-
-        Returns:
-            Список (верх, низ) в индексах colors.
-        """
-        tolerance = cfg.MESSAGES_SCAN_TOLERANCE
-        own_color = cfg.BACKGROUND_MY_MESS if is_mine else cfg.BACKGROUND_ANOTH_MESS
-        foreign_color = cfg.BACKGROUND_ANOTH_MESS if is_mine else cfg.BACKGROUND_MY_MESS
-
-        # 1. отрезки непрерывных пикселей, отличных от фона чата
-        runs: List[Tuple[int, int]] = []
-        start = None
-        for i, pixel in enumerate(colors):
-            if not ScreenAnalyzer.color_matches(pixel, cfg.BACKGROUND_CHAT, tolerance):
-                if start is None:
-                    start = i
-            elif start is not None:
-                runs.append((start, i))
-                start = None
-        if start is not None:
-            runs.append((start, len(colors)))
-
-        # 2. отбор: высота как у пузыря, внутри преимущественно «свой» цвет
-        ''' TODO: пока выключаю фильтрацию сегментов по цвету владельца сообщения, так как картинки выпадают из списков
-        result: List[Tuple[int, int]] = []
-        for top, bottom in runs:
-            height = bottom - top
-            if not cfg.MESSAGES_MIN_SEGMENT_HEIGHT <= height <= cfg.MESSAGES_MAX_SEGMENT_HEIGHT:
-                continue
-            segment_colors = colors[top:bottom]
-            own = sum(
-                1 for p in segment_colors
-                if ScreenAnalyzer.color_matches(p, own_color, tolerance)
-            )
-            foreign = sum(
-                1 for p in segment_colors
-                if ScreenAnalyzer.color_matches(p, foreign_color, tolerance)
-            )
-            if own < 10 or foreign > own:
-                continue
-            result.append((top, bottom))'''
-        return runs        #result
 
     def _read_message_time(self, seg: _MessageSegment) -> datetime | None:
         """Распознать время сообщения (часы:минуты) в правом нижнем углу его прямоугольника.
@@ -645,7 +630,6 @@ class ViberWindow:
         left, top, win_w, win_h = self._absolute_zone(cfg.FULL_MESSAGES_LIST_ZONE)
         
         image = ScreenAnalyzer.capture_region(left, top, win_w, win_h)
-        px = image.load()
         cy = click_y - top  # координата клика внутри снимка
         item_h = cfg.MESSAGE_MENU_ITEM_HEIGHT
 
@@ -658,54 +642,47 @@ class ViberWindow:
 
         def column_runs(col: int) -> List[Tuple[int, int]]:
             """Отрезки фона меню в столбце; низ может упираться в край окна.
-                один из отрезков - меню"""
-            runs: List[Tuple[int, int]] = []
-            start = None
-            for y in range(win_h):
-                if is_menu(px[col, y]):
-                    if start is None:
-                        start = y
-                elif start is not None:
-                    runs.append((start, y))
-                    start = None
-            if start is not None:
-                runs.append((start, win_h))  # нижняя граница = граница окна
-            #if len(runs)>1:
-            #    return [(runs[0][0], runs[len(runs)-1][1])]
-            return runs
+                один из отрезков - меню.
+                Сам анализ столбца — ocr_screen (column_pixels + find_runs)."""
+            return ScreenAnalyzer.find_runs(ScreenAnalyzer.column_pixels(image, col), is_menu)
 
         def row_bounds(col: int, row: int) -> Tuple[int, int] | None:
-            """Границы меню по фону в строке row: (лево, право) не включая право."""
-            if not 0 <= row < win_h or not is_menu(px[col, row]):
+            """Границы меню по фону в строке row: (лево, право) не включая право.
+
+            Ищем в 2 подхода (см. cfg.MENU_CORRECT_FOR_DOUBLE_SCAN_X): сначала
+            по расчитанному Y, потом на N пкс ниже. Какие границы шире - то и
+            нужно брать: в более узком попали на буквы. Сам поиск границ
+            участка одного цвета — ocr_screen.row_bounds.
+            """
+            def bounds_at(y: int, require_center: bool = True) -> Tuple[int, int] | None:
+                if not 0 <= y < image.height:
+                    return None
+                return ScreenAnalyzer.row_bounds(
+                    ScreenAnalyzer.row_pixels(image, y), col, is_menu, require_center
+                )
+
+            # первый подход: в колонке row обязан быть фон меню
+            near = bounds_at(row)
+            if near is None:
                 return None
-            #ищем в 2 подхода. Сначала по расчитанному Y, потом на 22 пкс ниже. Какие границы шире - то и нужно брать. В более узком попали на буквы значит
-            
-            x0 = col        # ищем левый край
-            while x0 > 0 and is_menu(px[x0 - 1, row]):
-                x0 -= 1
-            x1 = col + 1    # ищем правый край
-            while x1 < win_w and is_menu(px[x1, row]):
-                x1 += 1
 
-            #второй подход чуть ниже
-            x20 = col        # ищем левый край
-            while x20 > 0 and is_menu(px[x20 - 1, row+cfg.MENU_CORRECT_FOR_DOUBLE_SCAN_X]):
-                x20 -= 1
-            x21 = col + 1    # ищем правый край
-            while x21 < win_w and is_menu(px[x21, row+cfg.MENU_CORRECT_FOR_DOUBLE_SCAN_X]):
-                x21 += 1
+            # второй подход чуть ниже (там фон не обязателен: колонка могла
+            # попасть на букву, границы всё равно расширяются в обе стороны)
+            far = bounds_at(row + cfg.MENU_CORRECT_FOR_DOUBLE_SCAN_X, require_center=False)
+            if far is None:
+                return near
 
-            if x1-x0 > x21-x20:
-                return x0, x1
+            if near[1] - near[0] > far[1] - far[0]:
+                return near
             else:
-                return x20, x21
+                return far
 
         def find_rects(dx: int) -> List[Tuple[int, int, int, int]]:
             """Прямоугольники меню на зонде X = клик + dx (ближние к клику первые).
                 Некоторые прямоугольники могут быть ошибочными, точнее покажет уже распознание текста"""
             col = click_x + dx - left
             print(f"{int(time.time()*1000)} __find_rects {col}, {click_x+dx}") 
-            if not 0 <= col < win_w:
+            if not 0 <= col < image.width:
                 return []
             min_h = item_h * cfg.MESSAGE_MENU_MIN_ITEMS
             max_h = item_h * cfg.MESSAGE_MENU_MAX_ITEMS
@@ -1061,7 +1038,7 @@ class ViberWindow:
 if __name__ == "__main__":
     pyautogui.FAILSAFE = False
     
-    TEST = 2
+    TEST = 3
 
     if TEST == 0:   #тест координат скрина экрана
         viber = ViberWindow()

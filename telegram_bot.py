@@ -113,7 +113,7 @@ def open_chat(viber: ViberWindow, chat: ChatEntry) -> None:
     x = chat.position[0] + cfg.CHAT_HEADER_COORD[2] // 2
     y = chat.position[1] + cfg.CHAT_HEADER_COORD[3] // 2
     ScreenAnalyzer.click_in_place(*viber._abs_pnt((x, y)))
-    #time.sleep(cfg.CHAT_OPEN_DELAY)
+    time.sleep(cfg.CHAT_OPEN_DELAY)
 
 
 def process_chat(viber: ViberWindow, conn: sqlite3.Connection, chat: ChatEntry) -> None:
@@ -183,4 +183,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    
+
+
+# находит чат, открывает, копирует заголовок (но "Не удалось узнать имя чата — пропускаем")
+# затем прокручивает не чат вниз, а список чатов вниз колесиком, затем кликает на второй чат,но уже промазивается и снова копирует заголовок (и снова не распознает)

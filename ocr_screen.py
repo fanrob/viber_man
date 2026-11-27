@@ -3,6 +3,8 @@
 Класс ScreenAnalyzer содержит переиспользуемые утилиты:
 - снимки областей экрана и OCR;
 - поиск пикселей нужного цвета;
+- анализ рядов пикселей по уже полученному скрину (отрезки и группы
+  одного цвета, границы участков в строке);
 - клики, скролл колёсиком, ввод текста, нажатие клавиш;
 - поиск и активация окна по заголовку.
 
@@ -13,7 +15,7 @@ main() — фоновый цикл: каждые 5 секунд снимает �
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Sequence, Tuple
 
 import mss
 import pyautogui
@@ -183,6 +185,164 @@ class ScreenAnalyzer:
                     return y + row
 
         return None
+
+    # ------------------------------------------------------------------
+    # Анализ рядов пикселей (по уже полученному скрину, без нового захвата)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def column_pixels(image: Image.Image, x: int) -> List[Tuple[int, int, int]]:
+        """Вертикальный ряд пикселей (столбец x) из уже полученного скрина.
+
+        Индекс элемента списка — это Y внутри изображения (сверху вниз).
+        """
+        if not 0 <= x < image.width:
+            raise ValueError(f"x={x} вне границ изображения (0..{image.width - 1})")
+        px = image.load()
+        return [px[x, y] for y in range(image.height)]
+
+    @staticmethod
+    def row_pixels(image: Image.Image, y: int) -> List[Tuple[int, int, int]]:
+        """Горизонтальный ряд пикселей (строка y) из уже полученного скрина.
+
+        Индекс элемента списка — это X внутри изображения (слева направо).
+        """
+        if not 0 <= y < image.height:
+            raise ValueError(f"y={y} вне границ изображения (0..{image.height - 1})")
+        px = image.load()
+        return [px[x, y] for x in range(image.width)]
+
+    @staticmethod
+    def find_runs(
+        pixels: Sequence[Tuple[int, int, int]],
+        is_match: Callable[[Tuple[int, int, int]], bool],
+    ) -> List[Tuple[int, int]]:
+        """Найти в ряду пикселей отрезки подряд идущих пикселей, где is_match() истинно.
+
+        Args:
+            pixels: ряд пикселей (обычно вертикальный: индекс = Y, сверху вниз).
+            is_match: предикат «пиксель того, что ищем» (цвет, фон, меню...).
+
+        Returns:
+            Список (start, end), сверху вниз: end — индекс первого пикселя,
+            не прошедшего проверку (не включается); если такие пиксели
+            отсутствуют до конца ряда — end == len(pixels).
+        """
+        runs: List[Tuple[int, int]] = []
+        start: int | None = None
+        for i, pixel in enumerate(pixels):
+            if is_match(pixel):
+                if start is None:
+                    start = i
+            elif start is not None:
+                runs.append((start, i))
+                start = None
+        if start is not None:
+            runs.append((start, len(pixels)))
+        return runs
+
+    @staticmethod
+    def find_color_runs(
+        pixels: Sequence[Tuple[int, int, int]],
+        target_color: Tuple[int, int, int],
+        tolerance: int = 0,
+    ) -> List[Tuple[int, int]]:
+        """Непрерывные отрезки пикселей одного цвета (сверху вниз)."""
+        return ScreenAnalyzer.find_runs(
+            pixels,
+            lambda pixel: ScreenAnalyzer.color_matches(pixel, target_color, tolerance),
+        )
+
+    @staticmethod
+    def find_foreign_color_runs(
+        pixels: Sequence[Tuple[int, int, int]],
+        background_color: Tuple[int, int, int],
+        tolerance: int = 0,
+    ) -> List[Tuple[int, int]]:
+        """Отрезки пикселей, отличных от background_color (сверху вниз).
+
+        Участок прерывается на первом фоновом пикселе — даже одиночный шум
+        его разрывает. Если промежутки нужно схлопывать, используйте
+        find_color_groups с merge_gap.
+        """
+        return ScreenAnalyzer.find_runs(
+            pixels,
+            lambda pixel: not ScreenAnalyzer.color_matches(pixel, background_color, tolerance),
+        )
+
+    @staticmethod
+    def find_color_groups(
+        pixels: Sequence[Tuple[int, int, int]],
+        target_color: Tuple[int, int, int],
+        tolerance: int = 0,
+        merge_gap: int = 0,
+    ) -> List[Tuple[int, int]]:
+        """Группы пикселей одного цвета в вертикальном ряду.
+
+        Две группы, разделённые промежутком «не того» цвета длиной не больше
+        merge_gap, объединяются в одну (шум/сглаживание/прочерк между
+        участками одного цвета не должны резать группу на части).
+
+        Args:
+            pixels: вертикальный ряд пикселей из уже полученного скрина
+                (см. column_pixels); индекс = Y, сверху вниз.
+            target_color: искомый цвет.
+            tolerance: допуск сравнения (см. color_matches).
+            merge_gap: сколько пикселей другого цвета допускается между
+                группами (0 — группы не объединяются).
+
+        Returns:
+            Список (y_start, y_end), отсортированный сверху вниз, где
+            y_start — Y первого пикселя группы, y_end — Y первого пикселя
+            после группы (не включается, как и в find_runs).
+        """
+        groups = ScreenAnalyzer.find_color_runs(pixels, target_color, tolerance)
+        if merge_gap <= 0:
+            return groups
+
+        merged: List[Tuple[int, int]] = []
+        for start, end in groups:
+            if merged and start - merged[-1][1] <= merge_gap:
+                merged[-1] = (merged[-1][0], end)
+            else:
+                merged.append((start, end))
+        return merged
+
+    @staticmethod
+    def row_bounds(
+        pixels_row: Sequence[Tuple[int, int, int]],
+        col: int,
+        is_match: Callable[[Tuple[int, int, int]], bool],
+        require_center: bool = True,
+    ) -> Tuple[int, int] | None:
+        """Границы участка одного цвета в горизонтальном ряду, содержащем col.
+
+        Участок ищется в обе стороны от col, пока пиксели проходят is_match.
+
+        Args:
+            pixels_row: горизонтальный ряд пикселей (см. row_pixels).
+            col: колонка, внутри которой должен находиться участок.
+            is_match: предикат «пиксель того, что ищем».
+            require_center: True — пиксель col обязан проходить по is_match,
+                иначе None; False — цвет самого col не проверяется, зато
+                границы всё равно расширяются в обе стороны (нужно, если
+                колонка попала на «букву» внутри участка).
+
+        Returns:
+            (x0, x1) — не включая x1, либо None, если col вне ряда или
+            (при require_center) пиксель col не проходит по is_match.
+        """
+        if not 0 <= col < len(pixels_row):
+            return None
+        if require_center and not is_match(pixels_row[col]):
+            return None
+        x0 = col
+        while x0 > 0 and is_match(pixels_row[x0 - 1]):
+            x0 -= 1
+        x1 = col + 1
+        while x1 < len(pixels_row) and is_match(pixels_row[x1]):
+            x1 += 1
+        return x0, x1
 
     @staticmethod
     def click_in_place(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.0) -> None:
