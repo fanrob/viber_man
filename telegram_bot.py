@@ -127,10 +127,10 @@ def process_chat(viber: ViberWindow, conn: sqlite3.Connection, chat: ChatEntry) 
     else:
         print('прочитан чат: '+name)
 
-    messages = viber.get_messages(since=None)  # от старых к новым
+    messages = viber.get_messages(since=None, num_mess=1)  # от старых к новым
     if not messages:
         return
-
+    print ("прочитаны сообщения (%d)",len(messages))
     if is_new_chat(conn, name):
         # чат читаем впервые: новое — только последнее сообщение
         fresh = [messages[-1]]
@@ -164,19 +164,19 @@ def main() -> None:
             viber.close_holiday()
             viber.scroll_chats_to_up()  # каждый круг начинаем с верха списка
 
-            for _ in range(MAX_CHAT_PAGES):
-                unread = [c for c in viber.get_chat_list() if c.has_new_message]
-                if not unread:
-                    break
-                for chat in unread:
-                    process_chat(viber, conn, chat)
-                viber.scroll_chats(ViberWindow.SCROLL_DOWN, CHAT_SCROLL_AMOUNT)
+            #for _ in range(MAX_CHAT_PAGES):
+            unread = [c for c in viber.get_chat_list() if c.has_new_message]
+            if not unread:
+                continue #break
+            for chat in unread:
+                process_chat(viber, conn, chat)
+                #viber.scroll_chats(ViberWindow.SCROLL_DOWN, CHAT_SCROLL_AMOUNT)
         except KeyboardInterrupt:
             print("Выход.")
             conn.close()
             return
-        except Exception as exc:  # чтобы цикл не упал из-за разовой ошибки
-            print(f"Ошибка цикла: {exc}")
+        #except Exception as exc:  # чтобы цикл не упал из-за разовой ошибки
+        #    print(f"Ошибка цикла: {exc}")
 
         time.sleep(POLL_INTERVAL)
 

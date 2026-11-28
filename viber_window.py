@@ -320,7 +320,7 @@ class ViberWindow:
     # 5. Текст сообщений
     # ------------------------------------------------------------------
 
-    def get_messages(self, since: datetime | None = None) -> List[Message]:
+    def get_messages(self, since: datetime | None = None, num_mess: int = 4) -> List[Message]:
         """Сообщения открытого чата, от старых к новым.
 
         Чтение идёт снизу вверх, пока не будет достигнуто уже известное
@@ -329,7 +329,7 @@ class ViberWindow:
         Args:
             since: если задан — возвращаются только сообщения новее этого
                 времени; None — все видимые сообщения.
-
+            num_mess: сколько максимум считать сообщений
         Returns:
             Список сообщений (text + time + от кого), от старых к новым.
         """
@@ -360,11 +360,12 @@ class ViberWindow:
         # 1. активируем окно, держим фокус в ленте, прокручиваем в самый низ
         self.activate()
         self.scroll_messages_to_bottom()
-
+        time.sleep(cfg.CLICK_DEFAULT_DELAY)
         found: List[Message] = []   # порядок сбора: снизу вверх (новые -> старые)
         seen: set = set()           # уже прочитанные (защита от дублей после PageUp)
         prev_signature = None
 
+        num = 0     # количество прочитанных сообщений
         for page in range(cfg.MESSAGES_MAX_PAGES):
             logger.info("страница")
             segments, signature = self._scan_message_segments()
@@ -400,7 +401,12 @@ class ViberWindow:
                     continue  # уже прочитано (пересечение страниц после PageUp)
                 seen.add(key)
                 found.append(Message(text=text, time=msg_time, is_mine=seg.is_mine))
+                num += 1
+                if num > num_mess:
+                    break
 
+            if num > num_mess:
+                break
             if reached_old:
                 break
 
@@ -436,7 +442,7 @@ class ViberWindow:
             # 1. отрезки непрерывных пикселей, отличных от фона чата
             #    (сам анализ ряда пикселей — в ocr_screen.find_foreign_color_runs)
             runs = ScreenAnalyzer.find_foreign_color_runs(
-                colors, cfg.BACKGROUND_CHAT, cfg.MESSAGES_SCAN_TOLERANCE
+                colors, (cfg.BACKGROUND_CHAT, cfg.CHAT_LINE_NEW), cfg.MESSAGES_SCAN_TOLERANCE
             )
 
             # 2. отбор: высота как у пузыря, внутри преимущественно «свой» цвет
@@ -712,8 +718,11 @@ class ViberWindow:
             dx = cfg.MESSAGE_MENU_MY_OFFSET
         else:
             dx = cfg.MESSAGE_MENU_AN_OFFSET
-    
+
+        imgdbg = None
+        dx0, dy0, dx1, dy1 = 0,0,0,0
         for x0, y0, x1, y1 in find_rects(dx):
+            dx0, dy0, dx1, dy1 = x0, y0, x1, y1
             text = ScreenAnalyzer.get_text_in_region(x0, y0, x1 - x0, y1 - y0)
             rows = self._menu_rows(text)
             target = self._menu_copy_row(rows)
@@ -724,7 +733,7 @@ class ViberWindow:
                 logger.debug("Меню (%d,%d)-(%d,%d), строк %d, пункт %d",
                                 x0, y0, x1, y1, len(rows), target)
                 return x0, row_bottom, x1 - x0, item_h, rows[target]
-
+            imgdbg = ScreenAnalyzer.capture_region(x0, y0, x1 - x0, y1 - y0)
         # ни пунктов копирования, ни похожего на меню текста —
         # похоже на текст сообщения, а не на меню
         # if not rows or not all(len(r) <= cfg.MESSAGE_MENU_MAX_ITEM_TEXT_LEN
@@ -739,8 +748,10 @@ class ViberWindow:
         # target = None #min(max(row_no - 1, 0), len(rows) - 1)
     
 
-        logger.warning("Контекстное меню не найдено рядом с точкой (%d, %d)",
-                       click_x, click_y)
+        logger.warning("%d: Контекстное меню не найдено рядом с точкой (%d, %d) - квадрат %d, %d, %d, %d",
+                       int(time.time() * 1000), click_x, click_y, dx0, dy0, dx1, dy1 )
+        if not (imgdbg is None):
+            imgdbg.save(f"{int(time.time() * 1000)}err_find_button_copy.png")
         return None
 
     @staticmethod

@@ -75,7 +75,7 @@ FULL_MESSAGES_LIST_ZONE: Zone = (300, 112, 484, 467) #784,Y=579
 # Вертикальные линии сканирования внутри MESSAGES_LIST_ZONE (отсчёт от левого
 # края зоны): по левой должны попадаться только чужие пузыри, по правой —
 # только мои. ПОДОБРАТЬ (MPos).
-ANOTH_MESS_SCAN_X: int = 26     # внутри чужих пузырей слева
+ANOTH_MESS_SCAN_X: int = 24     # внутри чужих пузырей слева
 MY_MESS_SCAN_X: int = 460       # внутри моих пузырей справа    
 
 MESSAGES_SCAN_TOLERANCE = 0     # допуск сравнения с фоном (< 5, чтобы отличать белый пузырь от фона)
@@ -116,6 +116,7 @@ DEFAULT_COLOR_TOLERANCE = 0  # допуск отклонения цвета (0..
 DEFAULT_VIOL_COLOR: RGB = (115, 96, 242)
 
 BACKGROUND_CHAT: RGB = (250,233,225)    #фон чата
+CHAT_LINE_NEW: RGB = (190,177,171)
 BACKGROUND_ANOTH_MESS: RGB = (255,255,255)      # фон сообщений собеседника
 BACKGROUND_MY_MESS: RGB = (0,116,227) #(0, 97, 191) фон моих сообщений
  

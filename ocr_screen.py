@@ -256,10 +256,17 @@ class ScreenAnalyzer:
     @staticmethod
     def find_foreign_color_runs(
         pixels: Sequence[Tuple[int, int, int]],
-        background_color: Tuple[int, int, int],
+        background_colors: Sequence[Tuple[int, int, int]],
         tolerance: int = 0,
     ) -> List[Tuple[int, int]]:
-        """Отрезки пикселей, отличных от background_color (сверху вниз).
+        """Отрезки пикселей, отличных от фона (сверху вниз).
+
+        Args:
+            pixels: ряд пикселей (обычно вертикальный: индекс = Y, сверху вниз).
+            background_colors: список цветов фона — пиксель, совпадающий с
+                любым из них (с учётом tolerance), считается фоновым.
+                Пустой список — фона нет, весь ряд одним отрезком.
+            tolerance: допуск сравнения (см. color_matches).
 
         Участок прерывается на первом фоновом пикселе — даже одиночный шум
         его разрывает. Если промежутки нужно схлопывать, используйте
@@ -267,7 +274,10 @@ class ScreenAnalyzer:
         """
         return ScreenAnalyzer.find_runs(
             pixels,
-            lambda pixel: not ScreenAnalyzer.color_matches(pixel, background_color, tolerance),
+            lambda pixel: not any(
+                ScreenAnalyzer.color_matches(pixel, background_color, tolerance)
+                for background_color in background_colors
+            ),
         )
 
     @staticmethod
